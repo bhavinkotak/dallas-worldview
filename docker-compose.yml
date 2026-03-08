@@ -10,9 +10,13 @@ services:
   frontend:
     build:
       context: ./frontend
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+        NEXT_PUBLIC_CESIUM_ION_TOKEN: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJhZDcxNmY3Ni03ZmE3LTQ0NTgtYTQyMS05MWNkMjkyMDdlY2EiLCJpZCI6NDAwMDM0LCJpYXQiOjE3NzI5MzAyNDl9.xV7-Ezldm-GIsRyzWLK7XSPpqSLRdQOzqWx7Mv6nd2E
     ports:
       - "3000:3000"
     environment:
       NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+      NEXT_PUBLIC_CESIUM_ION_TOKEN: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJqdGkiOiJhZDcxNmY3Ni03ZmE3LTQ0NTgtYTQyMS05MWNkMjkyMDdlY2EiLCJpZCI6NDAwMDM0LCJpYXQiOjE3NzI5MzAyNDl9.xV7-Ezldm-GIsRyzWLK7XSPpqSLRdQOzqWx7Mv6nd2E
     depends_on:
       - backend

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 
 /* ───────── constants ───────── */
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
-const CESIUM_VERSION = "1.125.0";
+const CESIUM_VERSION = "1.126";
 const CESIUM_CDN = `https://cesium.com/downloads/cesiumjs/releases/${CESIUM_VERSION}/Build/Cesium`;
 const CESIUM_JS = `${CESIUM_CDN}/Cesium.js`;
 const CESIUM_CSS = `${CESIUM_CDN}/Widgets/widgets.css`;
@@ -436,11 +436,13 @@ export default function DallasWorldView() {
     );
   }, []);
 
-  const flyToPreset = useCallback(() => {
+  const flyToPreset = useCallback((placeLabel) => {
     const Cesium = window.Cesium;
     const viewer = viewerRef.current;
     if (!Cesium || !viewer) return;
-    const p = DALLAS_PLACES.find((pl) => pl.label.toLowerCase().includes(query.toLowerCase())) || DALLAS_PLACES[0];
+    const target = placeLabel || query;
+    const p = DALLAS_PLACES.find((pl) => pl.label === target) || DALLAS_PLACES[0];
+    setQuery(p.label);
     viewer.camera.flyTo({
       destination: Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.height),
       orientation: {
@@ -492,18 +494,20 @@ export default function DallasWorldView() {
 
         <nav className="top-controls">
           <div className="search-group">
-            <input
+            <select
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && flyToPreset()}
-              placeholder="Fly to location\u2026"
-              list="preset-list"
+              onChange={(e) => {
+                setQuery(e.target.value);
+                flyToPreset(e.target.value);
+              }}
               className="search-input"
-            />
-            <datalist id="preset-list">
-              {DALLAS_PLACES.map((p) => <option key={p.label} value={p.label} />)}
-            </datalist>
-            <button onClick={flyToPreset} className="btn btn-primary" title="Fly">{"\u2708"}</button>
+            >
+              <option value="">Fly to location…</option>
+              {DALLAS_PLACES.map((p) => (
+                <option key={p.label} value={p.label}>{p.label}</option>
+              ))}
+            </select>
+            <button onClick={() => flyToPreset()} className="btn btn-primary" title="Fly">{"\u2708"}</button>
           </div>
 
           <div className="btn-group">
