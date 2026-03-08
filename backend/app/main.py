@@ -21,8 +21,8 @@ async def refresh_once():
     events = []
     statuses = []
 
-    # Camera locations are always loaded (static data, no API call)
-    cam_events, cam_status = traffic_camera_events()
+    # Camera locations from DriveTexas/MapLarge (live feed with caching)
+    cam_events, cam_status = await traffic_camera_events()
     events.extend(cam_events)
     statuses.append(cam_status)
 

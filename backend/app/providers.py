@@ -3,42 +3,31 @@ from typing import Any
 import asyncio
 import hashlib
 import logging
+import re
+import json
+import urllib.parse
 import httpx
 from .config import Settings
 from .models import FeedStatus, MapEvent
 
 logger = logging.getLogger(__name__)
 
-# ── Dallas traffic camera locations (real positions on major highways) ─
-# Source: TxDOT ITS camera placement data for Dallas district.
-# These are real camera locations along major Dallas highways.
-DALLAS_TRAFFIC_CAMERAS: list[dict[str, Any]] = [
-    {"id": "cam-i35e-elm", "name": "I-35E @ Elm St", "lat": 32.7810, "lon": -96.7985, "highway": "I-35E", "direction": "N/S"},
-    {"id": "cam-i35e-mockingbird", "name": "I-35E @ Mockingbird Ln", "lat": 32.8380, "lon": -96.8190, "highway": "I-35E", "direction": "N/S"},
-    {"id": "cam-i35e-walnut", "name": "I-35E @ Walnut Hill Ln", "lat": 32.8750, "lon": -96.8365, "highway": "I-35E", "direction": "N/S"},
-    {"id": "cam-i35e-royal", "name": "I-35E @ Royal Ln", "lat": 32.8870, "lon": -96.8400, "highway": "I-35E", "direction": "N/S"},
-    {"id": "cam-us75-haskell", "name": "US-75 @ Haskell Ave", "lat": 32.7950, "lon": -96.7870, "highway": "US-75", "direction": "N/S"},
-    {"id": "cam-us75-fitzhugh", "name": "US-75 @ Fitzhugh Ave", "lat": 32.8050, "lon": -96.7850, "highway": "US-75", "direction": "N/S"},
-    {"id": "cam-us75-lovers", "name": "US-75 @ Lovers Ln", "lat": 32.8370, "lon": -96.7720, "highway": "US-75", "direction": "N/S"},
-    {"id": "cam-us75-635", "name": "US-75 @ I-635 (LBJ)", "lat": 32.9190, "lon": -96.7530, "highway": "US-75", "direction": "N/S"},
-    {"id": "cam-i30-hampton", "name": "I-30 @ Hampton Rd", "lat": 32.7530, "lon": -96.8290, "highway": "I-30", "direction": "E/W"},
-    {"id": "cam-i30-peak", "name": "I-30 @ Peak St", "lat": 32.7720, "lon": -96.7780, "highway": "I-30", "direction": "E/W"},
-    {"id": "cam-i30-dolphin", "name": "I-30 @ Dolphin Rd", "lat": 32.7700, "lon": -96.7550, "highway": "I-30", "direction": "E/W"},
-    {"id": "cam-i30-buckner", "name": "I-30 @ Buckner Blvd", "lat": 32.7630, "lon": -96.7150, "highway": "I-30", "direction": "E/W"},
-    {"id": "cam-i45-lamar", "name": "I-45 @ Lamar St", "lat": 32.7730, "lon": -96.7990, "highway": "I-45", "direction": "S"},
-    {"id": "cam-i45-simpson", "name": "I-45 @ Simpson Stuart Rd", "lat": 32.7090, "lon": -96.7670, "highway": "I-45", "direction": "S"},
-    {"id": "cam-i635-hillcrest", "name": "I-635 (LBJ) @ Hillcrest Rd", "lat": 32.9210, "lon": -96.7800, "highway": "I-635", "direction": "E/W"},
-    {"id": "cam-i635-marsh", "name": "I-635 (LBJ) @ Marsh Ln", "lat": 32.9280, "lon": -96.8400, "highway": "I-635", "direction": "E/W"},
-    {"id": "cam-dntte-woodall", "name": "DNT @ Woodall Rodgers", "lat": 32.7890, "lon": -96.8060, "highway": "DNT", "direction": "N/S"},
-    {"id": "cam-dnt-mockingbird", "name": "DNT @ Mockingbird Ln", "lat": 32.8370, "lon": -96.8100, "highway": "DNT", "direction": "N/S"},
-    {"id": "cam-dnt-northwest", "name": "DNT @ Northwest Hwy", "lat": 32.8690, "lon": -96.8200, "highway": "DNT", "direction": "N/S"},
-    {"id": "cam-dnt-635", "name": "DNT @ I-635 (LBJ)", "lat": 32.9250, "lon": -96.8200, "highway": "DNT", "direction": "N/S"},
-    {"id": "cam-i20-hampton", "name": "I-20 @ Hampton Rd", "lat": 32.6680, "lon": -96.8300, "highway": "I-20", "direction": "E/W"},
-    {"id": "cam-i20-polk", "name": "I-20 @ Polk St", "lat": 32.6670, "lon": -96.7870, "highway": "I-20", "direction": "E/W"},
-    {"id": "cam-i20-bonnieview", "name": "I-20 @ Bonnie View Rd", "lat": 32.6660, "lon": -96.7400, "highway": "I-20", "direction": "E/W"},
-    {"id": "cam-srloop12-walton", "name": "Loop 12 @ Walton Walker Blvd", "lat": 32.7650, "lon": -96.8700, "highway": "Loop 12", "direction": "N/S"},
-    {"id": "cam-pgbt-635", "name": "PGBT @ I-635", "lat": 32.9330, "lon": -96.6990, "highway": "PGBT", "direction": "E/W"},
+# ── DriveTexas / MapLarge camera API configuration ────────────────────
+# Source: DriveTexas.org uses MapLarge CDN for live traffic cameras across Texas.
+# We query the cameraPoint table and filter to the Dallas metro area.
+MAPLARGE_HOST = "dtx-e-cdn.maplarge.com"
+MAPLARGE_TABLE = "appgeo/cameraPoint"
+MAPLARGE_FIELDS = [
+    "name", "description", "route", "jurisdiction", "direction",
+    "httpsurl", "imageurl", "active", "XY",
 ]
+# Dallas metro bounding box: lat 32.5–33.15, lon -97.5 to -96.4
+DALLAS_CAM_BBOX = {"min_lat": 32.5, "max_lat": 33.15, "min_lon": -97.5, "max_lon": -96.4}
+
+# In-memory camera cache (refreshed periodically alongside other feeds)
+_camera_cache: list[dict[str, Any]] = []
+_camera_cache_ts: datetime | None = None
+_CAMERA_CACHE_TTL_SECONDS = 120  # refresh every 2 minutes
 
 # ── Dallas police‑beat approximate centroids ──────────────────────────
 # These map 3‑digit beat numbers to approximate (lat, lon).
@@ -204,33 +193,117 @@ def _string_or_default(record: dict[str, Any], keys: list[str], default: str):
     return default
 
 
-# ── Traffic Cameras (static curated list) ─────────────────────────────
-def traffic_camera_events() -> tuple[list[MapEvent], FeedStatus]:
-    """Return camera locations as MapEvents (layer='cameras')."""
+# ── Traffic Cameras (live from DriveTexas / MapLarge) ─────────────────
+async def _fetch_cameras_from_maplarge() -> list[dict[str, Any]]:
+    """Fetch all Texas traffic cameras from the MapLarge API and filter to Dallas area."""
+    query = {
+        "action": "table/query",
+        "query": {
+            "sqlselect": MAPLARGE_FIELDS,
+            "start": 0,
+            "table": MAPLARGE_TABLE,
+            "take": 5000,
+            "where": [],
+        },
+    }
+    req_str = json.dumps(query, separators=(",", ":"))
+    encoded = urllib.parse.quote(req_str, safe="")
+    url = f"https://{MAPLARGE_HOST}/Api/ProcessDirect?request={encoded}"
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            raw = resp.content
+            # Strip UTF-8 BOM if present
+            if raw[:3] == b"\xef\xbb\xbf":
+                raw = raw[3:]
+            data = json.loads(raw)
+
+        cols = data.get("data", {}).get("data", {})
+        total = data.get("data", {}).get("totals", {}).get("Records", 0)
+        names = cols.get("name", [])
+        if not names:
+            logger.warning("MapLarge returned no camera data (total=%s)", total)
+            return []
+
+        cameras: list[dict[str, Any]] = []
+        bbox = DALLAS_CAM_BBOX
+        for i in range(len(names)):
+            xy = cols.get("XY", [""])[i]
+            m = re.match(r"POINT\s*\(\s*([-\d.]+)\s+([-\d.]+)\s*\)", xy)
+            if not m:
+                continue
+            lng, lat = float(m.group(1)), float(m.group(2))
+            # Filter to Dallas metro area
+            if not (bbox["min_lat"] <= lat <= bbox["max_lat"] and bbox["min_lon"] <= lng <= bbox["max_lon"]):
+                continue
+            # Skip inactive cameras
+            if cols.get("active", [1])[i] != 1:
+                continue
+            cameras.append({
+                "name": names[i],
+                "description": cols.get("description", [""])[i],
+                "route": cols.get("route", [""])[i],
+                "jurisdiction": cols.get("jurisdiction", [""])[i],
+                "direction": cols.get("direction", [""])[i],
+                "httpsurl": cols.get("httpsurl", [""])[i],
+                "imageurl": cols.get("imageurl", [""])[i],
+                "lat": lat,
+                "lng": lng,
+            })
+
+        logger.info("MapLarge: %d total cameras, %d in Dallas area", total, len(cameras))
+        return cameras
+
+    except Exception as exc:
+        logger.exception("Failed to fetch cameras from MapLarge: %s", exc)
+        return []
+
+
+async def traffic_camera_events() -> tuple[list[MapEvent], FeedStatus]:
+    """Return camera locations as MapEvents (layer='cameras') from DriveTexas/MapLarge."""
+    global _camera_cache, _camera_cache_ts
     ts = _now()
+
+    # Use cache if fresh enough
+    if _camera_cache_ts and (ts - _camera_cache_ts).total_seconds() < _CAMERA_CACHE_TTL_SECONDS and _camera_cache:
+        cameras = _camera_cache
+    else:
+        cameras = await _fetch_cameras_from_maplarge()
+        if cameras:
+            _camera_cache = cameras
+            _camera_cache_ts = ts
+        elif _camera_cache:
+            # Keep stale cache on fetch failure
+            cameras = _camera_cache
+
     events: list[MapEvent] = []
-    for cam in DALLAS_TRAFFIC_CAMERAS:
+    for cam in cameras:
         events.append(MapEvent(
-            event_id=f"camera-{cam['id']}-{ts.isoformat()}",
-            entity_id=f"camera-{cam['id']}",
-            source="txdot-cameras",
+            event_id=f"camera-{cam['name']}-{ts.isoformat()}",
+            entity_id=f"camera-{cam['name']}",
+            source="drivetexas",
             layer="cameras",
-            title=cam["name"],
-            description=f"Traffic camera on {cam['highway']} ({cam['direction']})",
+            title=cam["description"] or cam["name"],
+            description=f"{cam['route']} — {cam['direction']} ({cam['jurisdiction']})",
             status="online",
             timestamp=ts,
             lat=cam["lat"],
-            lon=cam["lon"],
+            lon=cam["lng"],
             properties={
-                "highway": cam["highway"],
+                "camera_id": cam["name"],
+                "highway": cam["route"],
                 "direction": cam["direction"],
+                "jurisdiction": cam["jurisdiction"],
                 "type": "traffic_camera",
-                "camera_id": cam["id"],
+                "httpsurl": cam["httpsurl"],
+                "stream_url": cam["httpsurl"],
             },
         ))
     return events, FeedStatus(
-        source="txdot-cameras", ok=True, last_refresh=ts,
-        message=f"{len(events)} cameras loaded.",
+        source="drivetexas", ok=bool(events), last_refresh=ts,
+        message=f"{len(events)} live cameras from DriveTexas.",
     )
 
 

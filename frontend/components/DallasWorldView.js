@@ -65,6 +65,108 @@ function loadCesium() {
   return window.__cesiumPromise;
 }
 
+/* ───────── HLS.js loader (for live camera streams) ───────── */
+const HLS_CDN = "https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js";
+function loadHls() {
+  if (typeof window === "undefined") return Promise.reject(new Error("Browser only"));
+  if (window.Hls) return Promise.resolve(window.Hls);
+  if (window.__hlsPromise) return window.__hlsPromise;
+  window.__hlsPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = HLS_CDN;
+    script.async = true;
+    script.onload = () => resolve(window.Hls);
+    script.onerror = () => reject(new Error("Failed to load hls.js"));
+    document.body.appendChild(script);
+  });
+  return window.__hlsPromise;
+}
+
+/* ───────── CameraStream component ───────── */
+function CameraStream({ url, title }) {
+  const videoRef = useRef(null);
+  const hlsRef = useRef(null);
+  const [error, setError] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!url || !videoRef.current) return;
+    setError(false);
+    setLoading(true);
+    let hls = null;
+    let cancelled = false;
+
+    (async () => {
+      const video = videoRef.current;
+      // If native HLS support (Safari/iOS)
+      if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        video.src = url;
+        video.addEventListener("loadeddata", () => { if (!cancelled) setLoading(false); });
+        video.addEventListener("error", () => { if (!cancelled) { setError(true); setLoading(false); }});
+        video.play().catch(() => {});
+        return;
+      }
+      try {
+        const Hls = await loadHls();
+        if (cancelled) return;
+        if (!Hls.isSupported()) { setError(true); setLoading(false); return; }
+        hls = new Hls({ enableWorker: true, lowLatencyMode: true, maxBufferLength: 5 });
+        hlsRef.current = hls;
+        hls.loadSource(url);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          if (!cancelled) { setLoading(false); video.play().catch(() => {}); }
+        });
+        hls.on(Hls.Events.ERROR, (_, data) => {
+          if (data.fatal && !cancelled) { setError(true); setLoading(false); }
+        });
+      } catch {
+        if (!cancelled) { setError(true); setLoading(false); }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (hlsRef.current) { hlsRef.current.destroy(); hlsRef.current = null; }
+    };
+  }, [url]);
+
+  if (error || !url) {
+    return (
+      <div className="cam-preview" style={{ display: "flex", alignItems: "center", justifyContent: "center", background: "#1a1a2e", color: "#888", fontSize: "13px" }}>
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: "32px", marginBottom: "6px" }}>{"\uD83D\uDCF7"}</div>
+          <div>Stream unavailable</div>
+          {url && <div style={{ fontSize: "11px", marginTop: "4px", color: "#666" }}>HLS connection failed</div>}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="cam-preview" style={{ position: "relative", background: "#000" }}>
+      {loading && (
+        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.7)", zIndex: 2 }}>
+          <div style={{ color: "#22d3ee", fontSize: "13px" }}>Loading stream…</div>
+        </div>
+      )}
+      <video
+        ref={videoRef}
+        muted
+        autoPlay
+        playsInline
+        style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "8px" }}
+      />
+      <div className="cam-preview-overlay">
+        <span className="cam-live-badge">
+          <span className="cam-live-dot" /> LIVE
+        </span>
+        <span className="cam-id-badge">{title || "CAM"}</span>
+      </div>
+    </div>
+  );
+}
+
 /* ───────── helpers ───────── */
 function colorForLayer(Cesium, layer) {
   const hex = LAYER_META[layer]?.color || "#ffffff";
@@ -677,26 +779,17 @@ export default function DallasWorldView() {
             {/* Camera-specific inspector view */}
             {selectedEvent.layer === "cameras" ? (
               <>
-                {/* Live map tile as camera preview */}
-                <div className="cam-preview">
-                  <img
-                    src={`https://tile.openstreetmap.org/17/${Math.floor((1 - Math.log(Math.tan(selectedEvent.lat * Math.PI / 180) + 1 / Math.cos(selectedEvent.lat * Math.PI / 180)) / Math.PI) / 2 * (1 << 17))}/${Math.floor((selectedEvent.lon + 180) / 360 * (1 << 17))}.png`}
-                    alt={`Map view near ${selectedEvent.title}`}
-                    className="cam-preview-img"
-                  />
-                  <div className="cam-preview-overlay">
-                    <span className="cam-live-badge">
-                      <span className="cam-live-dot" /> LIVE
-                    </span>
-                    <span className="cam-id-badge">{selectedEvent.properties?.camera_id || "CAM"}</span>
-                  </div>
-                </div>
+                {/* Live HLS camera stream */}
+                <CameraStream
+                  url={selectedEvent.properties?.stream_url || selectedEvent.properties?.httpsurl}
+                  title={selectedEvent.properties?.camera_id || selectedEvent.title}
+                />
 
                 <p className="insp-desc">{selectedEvent.description}</p>
 
                 <div className="insp-grid">
                   <div className="insp-field">
-                    <span className="insp-key">Highway</span>
+                    <span className="insp-key">Route</span>
                     <span className="insp-val">{selectedEvent.properties?.highway || "\u2013"}</span>
                   </div>
                   <div className="insp-field">
@@ -704,8 +797,16 @@ export default function DallasWorldView() {
                     <span className="insp-val">{selectedEvent.properties?.direction || "\u2013"}</span>
                   </div>
                   <div className="insp-field">
+                    <span className="insp-key">Jurisdiction</span>
+                    <span className="insp-val">{selectedEvent.properties?.jurisdiction || "\u2013"}</span>
+                  </div>
+                  <div className="insp-field">
                     <span className="insp-key">Status</span>
                     <span className="insp-val cam-status-online">{selectedEvent.status || "online"}</span>
+                  </div>
+                  <div className="insp-field">
+                    <span className="insp-key">Camera ID</span>
+                    <span className="insp-val mono">{selectedEvent.properties?.camera_id || "\u2013"}</span>
                   </div>
                   <div className="insp-field">
                     <span className="insp-key">Source</span>
@@ -722,12 +823,12 @@ export default function DallasWorldView() {
                 </div>
 
                 <a
-                  href={`https://its.txdot.gov/its/District/DAL/CCTV`}
+                  href={`https://drivetexas.org/?ll=${selectedEvent.lon},${selectedEvent.lat}&r=cos&z=14`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="cam-txdot-link"
                 >
-                  {"\uD83D\uDD17"} View on TxDOT ITS Portal
+                  {"\uD83D\uDD17"} View on DriveTexas
                 </a>
                 <a
                   href={`https://www.google.com/maps/@${selectedEvent.lat},${selectedEvent.lon},18z`}
