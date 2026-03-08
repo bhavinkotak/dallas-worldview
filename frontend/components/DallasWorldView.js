@@ -674,33 +674,102 @@ export default function DallasWorldView() {
               </div>
             </div>
 
-            <p className="insp-desc">{selectedEvent.description || "No description available."}</p>
+            {/* Camera-specific inspector view */}
+            {selectedEvent.layer === "cameras" ? (
+              <>
+                {/* Live map tile as camera preview */}
+                <div className="cam-preview">
+                  <img
+                    src={`https://tile.openstreetmap.org/17/${Math.floor((1 - Math.log(Math.tan(selectedEvent.lat * Math.PI / 180) + 1 / Math.cos(selectedEvent.lat * Math.PI / 180)) / Math.PI) / 2 * (1 << 17))}/${Math.floor((selectedEvent.lon + 180) / 360 * (1 << 17))}.png`}
+                    alt={`Map view near ${selectedEvent.title}`}
+                    className="cam-preview-img"
+                  />
+                  <div className="cam-preview-overlay">
+                    <span className="cam-live-badge">
+                      <span className="cam-live-dot" /> LIVE
+                    </span>
+                    <span className="cam-id-badge">{selectedEvent.properties?.camera_id || "CAM"}</span>
+                  </div>
+                </div>
 
-            <div className="insp-grid">
-              <div className="insp-field">
-                <span className="insp-key">Source</span>
-                <span className="insp-val">{selectedEvent.source || "\u2013"}</span>
-              </div>
-              <div className="insp-field">
-                <span className="insp-key">Status</span>
-                <span className="insp-val">{selectedEvent.status || "\u2013"}</span>
-              </div>
-              <div className="insp-field">
-                <span className="insp-key">Latitude</span>
-                <span className="insp-val mono">{Number(selectedEvent.lat).toFixed(5)}</span>
-              </div>
-              <div className="insp-field">
-                <span className="insp-key">Longitude</span>
-                <span className="insp-val mono">{Number(selectedEvent.lon).toFixed(5)}</span>
-              </div>
-              <div className="insp-field full">
-                <span className="insp-key">Timestamp</span>
-                <span className="insp-val">{new Date(selectedEvent.timestamp).toLocaleString()}</span>
-              </div>
-            </div>
+                <p className="insp-desc">{selectedEvent.description}</p>
 
-            <div className="section-header"><h2>Raw Properties</h2></div>
-            <pre className="insp-json">{JSON.stringify(selectedEvent.properties || {}, null, 2)}</pre>
+                <div className="insp-grid">
+                  <div className="insp-field">
+                    <span className="insp-key">Highway</span>
+                    <span className="insp-val">{selectedEvent.properties?.highway || "\u2013"}</span>
+                  </div>
+                  <div className="insp-field">
+                    <span className="insp-key">Direction</span>
+                    <span className="insp-val">{selectedEvent.properties?.direction || "\u2013"}</span>
+                  </div>
+                  <div className="insp-field">
+                    <span className="insp-key">Status</span>
+                    <span className="insp-val cam-status-online">{selectedEvent.status || "online"}</span>
+                  </div>
+                  <div className="insp-field">
+                    <span className="insp-key">Source</span>
+                    <span className="insp-val">{selectedEvent.source || "\u2013"}</span>
+                  </div>
+                  <div className="insp-field">
+                    <span className="insp-key">Latitude</span>
+                    <span className="insp-val mono">{Number(selectedEvent.lat).toFixed(5)}</span>
+                  </div>
+                  <div className="insp-field">
+                    <span className="insp-key">Longitude</span>
+                    <span className="insp-val mono">{Number(selectedEvent.lon).toFixed(5)}</span>
+                  </div>
+                </div>
+
+                <a
+                  href={`https://its.txdot.gov/its/District/DAL/CCTV`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="cam-txdot-link"
+                >
+                  {"\uD83D\uDD17"} View on TxDOT ITS Portal
+                </a>
+                <a
+                  href={`https://www.google.com/maps/@${selectedEvent.lat},${selectedEvent.lon},18z`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="cam-txdot-link"
+                  style={{ marginTop: "4px" }}
+                >
+                  {"\uD83D\uDDFA\uFE0F"} View on Google Maps
+                </a>
+              </>
+            ) : (
+              <>
+                <p className="insp-desc">{selectedEvent.description || "No description available."}</p>
+
+                <div className="insp-grid">
+                  <div className="insp-field">
+                    <span className="insp-key">Source</span>
+                    <span className="insp-val">{selectedEvent.source || "\u2013"}</span>
+                  </div>
+                  <div className="insp-field">
+                    <span className="insp-key">Status</span>
+                    <span className="insp-val">{selectedEvent.status || "\u2013"}</span>
+                  </div>
+                  <div className="insp-field">
+                    <span className="insp-key">Latitude</span>
+                    <span className="insp-val mono">{Number(selectedEvent.lat).toFixed(5)}</span>
+                  </div>
+                  <div className="insp-field">
+                    <span className="insp-key">Longitude</span>
+                    <span className="insp-val mono">{Number(selectedEvent.lon).toFixed(5)}</span>
+                  </div>
+                  <div className="insp-field full">
+                    <span className="insp-key">Timestamp</span>
+                    <span className="insp-val">{new Date(selectedEvent.timestamp).toLocaleString()}</span>
+                  </div>
+                </div>
+
+                <div className="section-header"><h2>Raw Properties</h2></div>
+                <pre className="insp-json">{JSON.stringify(selectedEvent.properties || {}, null, 2)}</pre>
+              </>
+            )}
           </div>
         </aside>
       )}
