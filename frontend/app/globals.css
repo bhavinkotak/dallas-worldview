@@ -106,7 +106,7 @@ a { color: #7dd3fc; text-decoration: none; }
   display: flex; align-items: center; gap: 4px;
 }
 .search-input {
-  width: 180px;
+  width: 200px;
   padding: 7px 12px;
   background: rgba(15,23,42,0.9);
   border: 1px solid rgba(148,163,184,0.15);

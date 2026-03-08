@@ -6,7 +6,7 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from .config import get_settings
 from .models import EventEnvelope
-from .providers import dallas_open_data_events, weather_events
+from .providers import dallas_open_data_events, weather_events, traffic_camera_events
 from .store import EventStore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -20,6 +20,11 @@ refresh_task = None
 async def refresh_once():
     events = []
     statuses = []
+
+    # Camera locations are always loaded (static data, no API call)
+    cam_events, cam_status = traffic_camera_events()
+    events.extend(cam_events)
+    statuses.append(cam_status)
 
     if settings.use_live_feeds:
         logger.info("Refreshing live feeds…")
@@ -109,6 +114,7 @@ async def layers():
             {"id": "traffic", "label": "Traffic / Active Calls", "count": counts.get("traffic", 0)},
             {"id": "incidents", "label": "Incidents", "count": counts.get("incidents", 0)},
             {"id": "crime", "label": "Crime", "count": counts.get("crime", 0)},
+            {"id": "cameras", "label": "Traffic Cameras", "count": counts.get("cameras", 0)},
         ]
     }
 

@@ -15,18 +15,22 @@ const CESIUM_ION_TOKEN = process.env.NEXT_PUBLIC_CESIUM_ION_TOKEN || "";
 
 const DALLAS_CENTER = { lat: 32.7767, lon: -96.797 };
 
+/* Each place has a bounding box (bbox) for filtering events to that area.
+   bbox: [minLat, maxLat, minLon, maxLon] — roughly 0.03-0.06° radius for neighborhoods,
+   wider for airports and distant cities. null = show all Dallas data. */
 const DALLAS_PLACES = [
-  { label: "Downtown Dallas", lat: 32.7767, lon: -96.797, height: 2200, heading: 15, pitch: -40 },
-  { label: "Dallas City Hall", lat: 32.7763, lon: -96.7969, height: 1600, heading: 0, pitch: -35 },
-  { label: "Deep Ellum", lat: 32.7843, lon: -96.781, height: 1600, heading: 45, pitch: -35 },
-  { label: "Fair Park", lat: 32.7792, lon: -96.7597, height: 2200, heading: -30, pitch: -40 },
-  { label: "Love Field", lat: 32.8471, lon: -96.8517, height: 4200, heading: 10, pitch: -50 },
-  { label: "DFW Airport", lat: 32.8998, lon: -97.0403, height: 6500, heading: 0, pitch: -55 },
-  { label: "Bishop Arts", lat: 32.7493, lon: -96.8278, height: 2200, heading: 20, pitch: -35 },
-  { label: "White Rock Lake", lat: 32.8269, lon: -96.7246, height: 3600, heading: -15, pitch: -45 },
-  { label: "Reunion Tower", lat: 32.7755, lon: -96.8088, height: 1400, heading: 30, pitch: -30 },
-  { label: "Uptown", lat: 32.7990, lon: -96.8025, height: 2000, heading: -10, pitch: -35 },
-  { label: "McKinney", lat: 33.1972, lon: -96.6397, height: 4500, heading: 0, pitch: -45 },
+  { label: "All Dallas", lat: 32.7767, lon: -96.797, height: 25000, heading: 0, pitch: -60, bbox: null },
+  { label: "Downtown Dallas", lat: 32.7767, lon: -96.797, height: 2200, heading: 15, pitch: -40, bbox: [32.755, 32.800, -96.820, -96.775] },
+  { label: "Dallas City Hall", lat: 32.7763, lon: -96.7969, height: 1600, heading: 0, pitch: -35, bbox: [32.760, 32.790, -96.815, -96.780] },
+  { label: "Deep Ellum", lat: 32.7843, lon: -96.781, height: 1600, heading: 45, pitch: -35, bbox: [32.770, 32.800, -96.800, -96.760] },
+  { label: "Fair Park", lat: 32.7792, lon: -96.7597, height: 2200, heading: -30, pitch: -40, bbox: [32.760, 32.800, -96.780, -96.740] },
+  { label: "Love Field", lat: 32.8471, lon: -96.8517, height: 4200, heading: 10, pitch: -50, bbox: [32.825, 32.870, -96.880, -96.825] },
+  { label: "DFW Airport", lat: 32.8998, lon: -97.0403, height: 6500, heading: 0, pitch: -55, bbox: [32.860, 32.940, -97.100, -96.980] },
+  { label: "Bishop Arts", lat: 32.7493, lon: -96.8278, height: 2200, heading: 20, pitch: -35, bbox: [32.730, 32.770, -96.850, -96.810] },
+  { label: "White Rock Lake", lat: 32.8269, lon: -96.7246, height: 3600, heading: -15, pitch: -45, bbox: [32.800, 32.860, -96.760, -96.690] },
+  { label: "Reunion Tower", lat: 32.7755, lon: -96.8088, height: 1400, heading: 30, pitch: -30, bbox: [32.760, 32.790, -96.825, -96.790] },
+  { label: "Uptown", lat: 32.7990, lon: -96.8025, height: 2000, heading: -10, pitch: -35, bbox: [32.785, 32.815, -96.820, -96.785] },
+  { label: "McKinney", lat: 33.1972, lon: -96.6397, height: 4500, heading: 0, pitch: -45, bbox: [33.150, 33.240, -96.700, -96.580] },
 ];
 
 /* ───────── layer config ───────── */
@@ -35,6 +39,7 @@ const LAYER_META = {
   traffic: { label: "Active Calls", icon: "\u{1F694}", color: "#f59e0b", height: 60, priority: 2 },
   incidents: { label: "Incidents", icon: "\u{1F534}", color: "#ef4444", height: 90, priority: 3 },
   crime: { label: "Crime", icon: "\u26A0\uFE0F", color: "#a855f7", height: 70, priority: 4 },
+  cameras: { label: "Traffic Cameras", icon: "\u{1F4F7}", color: "#22d3ee", height: 100, priority: 5 },
 };
 
 /* ───────── Cesium loader ───────── */
@@ -76,9 +81,15 @@ function readCesiumProp(value, Cesium) {
   return value;
 }
 
-function buildEventUrl(mode, minutesAgo, layers) {
+function buildEventUrl(mode, minutesAgo, layers, bbox) {
   const params = new URLSearchParams();
   if (layers) params.set("layers", layers);
+  if (bbox) {
+    params.set("min_lat", String(bbox[0]));
+    params.set("max_lat", String(bbox[1]));
+    params.set("min_lon", String(bbox[2]));
+    params.set("max_lon", String(bbox[3]));
+  }
   if (mode === "live" || minutesAgo === 0) return `${API_BASE}/api/events/current?${params}`;
   params.set("minutes_ago", String(minutesAgo));
   return `${API_BASE}/api/events/replay?${params}`;
@@ -111,13 +122,14 @@ export default function DallasWorldView() {
   const buildingsRef = useRef(null);
 
   const [layers, setLayers] = useState([]);
-  const [selectedLayers, setSelectedLayers] = useState(["weather", "traffic", "incidents", "crime"]);
+  const [selectedLayers, setSelectedLayers] = useState(["weather", "traffic", "incidents", "crime", "cameras"]);
   const [events, setEvents] = useState([]);
   const [feeds, setFeeds] = useState([]);
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [mode, setMode] = useState("live");
   const [minutesAgo, setMinutesAgo] = useState(0);
   const [query, setQuery] = useState("");
+  const [activeBbox, setActiveBbox] = useState(null); // [minLat, maxLat, minLon, maxLon] or null for all
   const [asOf, setAsOf] = useState(new Date().toISOString());
   const [status, setStatus] = useState("Initializing\u2026");
   const [panelOpen, setPanelOpen] = useState(true);
@@ -320,7 +332,7 @@ export default function DallasWorldView() {
 
     async function refresh() {
       try {
-        const url = buildEventUrl(mode, minutesAgo, selectedLayerStr);
+        const url = buildEventUrl(mode, minutesAgo, selectedLayerStr, activeBbox);
         const [er, fr] = await Promise.all([
           fetch(url, { cache: "no-store" }),
           fetch(`${API_BASE}/api/feed-status`, { cache: "no-store" }),
@@ -331,7 +343,8 @@ export default function DallasWorldView() {
           setEvents(ej.events || []);
           setAsOf(ej.as_of || new Date().toISOString());
           setFeeds(fj.feeds || []);
-          setStatus(`${ej.count || 0} events`);
+          const area = activeBbox ? " (area)" : "";
+          setStatus(`${ej.count || 0} events${area}`);
         }
       } catch (err) {
         if (!ignore) setStatus(`Refresh error: ${err.message}`);
@@ -342,7 +355,7 @@ export default function DallasWorldView() {
     fetchTimerRef.current = setTimeout(refresh, 150);
     const iv = setInterval(refresh, mode === "live" && minutesAgo === 0 ? 15000 : 30000);
     return () => { ignore = true; clearTimeout(fetchTimerRef.current); clearInterval(iv); };
-  }, [mode, minutesAgo, selectedLayerStr]);
+  }, [mode, minutesAgo, selectedLayerStr, activeBbox]);
 
   /* -- sync entities on map -- */
   useEffect(() => {
@@ -357,6 +370,7 @@ export default function DallasWorldView() {
       live.add(ev.entity_id);
       const c = colorForLayer(Cesium, ev.layer);
       const alt = heightForLayer(ev.layer);
+      const isCamera = ev.layer === "cameras";
       let ent = map.get(ev.entity_id);
 
       if (!ent) {
@@ -364,16 +378,16 @@ export default function DallasWorldView() {
           id: ev.entity_id,
           position: Cesium.Cartesian3.fromDegrees(ev.lon, ev.lat, alt / 2),
           point: {
-            pixelSize: ev.layer === "weather" ? 14 : 10,
+            pixelSize: isCamera ? 12 : ev.layer === "weather" ? 14 : 10,
             color: c,
-            outlineColor: Cesium.Color.BLACK.withAlpha(0.7),
-            outlineWidth: 1.5,
+            outlineColor: isCamera ? Cesium.Color.WHITE.withAlpha(0.9) : Cesium.Color.BLACK.withAlpha(0.7),
+            outlineWidth: isCamera ? 2.5 : 1.5,
             scaleByDistance: new Cesium.NearFarScalar(1500, 1.3, 150000, 0.5),
             translucencyByDistance: new Cesium.NearFarScalar(1500, 1.0, 180000, 0.1),
             distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 300000),
             heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
           },
-          cylinder: {
+          cylinder: isCamera ? undefined : {
             length: alt,
             topRadius: 35,
             bottomRadius: 35,
@@ -384,17 +398,19 @@ export default function DallasWorldView() {
             distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 25000),
           },
           label: {
-            text: ev.title && ev.title.length > 42 ? ev.title.slice(0, 40) + "\u2026" : ev.title,
-            font: "600 11px Inter, sans-serif",
+            text: isCamera
+              ? "\uD83D\uDCF7 " + ev.title
+              : ev.title && ev.title.length > 42 ? ev.title.slice(0, 40) + "\u2026" : ev.title,
+            font: isCamera ? "600 12px Inter, sans-serif" : "600 11px Inter, sans-serif",
             scale: 1.0,
             show: true,
             pixelOffset: new Cesium.Cartesian2(0, -20),
-            fillColor: Cesium.Color.WHITE,
+            fillColor: isCamera ? Cesium.Color.fromCssColorString("#22d3ee") : Cesium.Color.WHITE,
             style: Cesium.LabelStyle.FILL_AND_OUTLINE,
             outlineColor: Cesium.Color.BLACK,
             outlineWidth: 3,
             horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 15000),
+            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, isCamera ? 20000 : 15000),
             showBackground: true,
             backgroundColor: Cesium.Color.fromCssColorString("#0f172a").withAlpha(0.75),
             backgroundPadding: new Cesium.Cartesian2(6, 4),
@@ -443,6 +459,7 @@ export default function DallasWorldView() {
     const target = placeLabel || query;
     const p = DALLAS_PLACES.find((pl) => pl.label === target) || DALLAS_PLACES[0];
     setQuery(p.label);
+    setActiveBbox(p.bbox || null); // update bbox filter → triggers API re-fetch
     viewer.camera.flyTo({
       destination: Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.height),
       orientation: {
@@ -497,12 +514,18 @@ export default function DallasWorldView() {
             <select
               value={query}
               onChange={(e) => {
-                setQuery(e.target.value);
-                flyToPreset(e.target.value);
+                const val = e.target.value;
+                setQuery(val);
+                if (val) {
+                  flyToPreset(val);
+                } else {
+                  // Reset to show all Dallas data
+                  setActiveBbox(null);
+                }
               }}
               className="search-input"
             >
-              <option value="">Fly to location…</option>
+              <option value="">All Dallas (no filter)</option>
               {DALLAS_PLACES.map((p) => (
                 <option key={p.label} value={p.label}>{p.label}</option>
               ))}

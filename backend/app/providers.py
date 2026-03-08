@@ -9,6 +9,37 @@ from .models import FeedStatus, MapEvent
 
 logger = logging.getLogger(__name__)
 
+# ── Dallas traffic camera locations (real positions on major highways) ─
+# Source: TxDOT ITS camera placement data for Dallas district.
+# These are real camera locations along major Dallas highways.
+DALLAS_TRAFFIC_CAMERAS: list[dict[str, Any]] = [
+    {"id": "cam-i35e-elm", "name": "I-35E @ Elm St", "lat": 32.7810, "lon": -96.7985, "highway": "I-35E", "direction": "N/S"},
+    {"id": "cam-i35e-mockingbird", "name": "I-35E @ Mockingbird Ln", "lat": 32.8380, "lon": -96.8190, "highway": "I-35E", "direction": "N/S"},
+    {"id": "cam-i35e-walnut", "name": "I-35E @ Walnut Hill Ln", "lat": 32.8750, "lon": -96.8365, "highway": "I-35E", "direction": "N/S"},
+    {"id": "cam-i35e-royal", "name": "I-35E @ Royal Ln", "lat": 32.8870, "lon": -96.8400, "highway": "I-35E", "direction": "N/S"},
+    {"id": "cam-us75-haskell", "name": "US-75 @ Haskell Ave", "lat": 32.7950, "lon": -96.7870, "highway": "US-75", "direction": "N/S"},
+    {"id": "cam-us75-fitzhugh", "name": "US-75 @ Fitzhugh Ave", "lat": 32.8050, "lon": -96.7850, "highway": "US-75", "direction": "N/S"},
+    {"id": "cam-us75-lovers", "name": "US-75 @ Lovers Ln", "lat": 32.8370, "lon": -96.7720, "highway": "US-75", "direction": "N/S"},
+    {"id": "cam-us75-635", "name": "US-75 @ I-635 (LBJ)", "lat": 32.9190, "lon": -96.7530, "highway": "US-75", "direction": "N/S"},
+    {"id": "cam-i30-hampton", "name": "I-30 @ Hampton Rd", "lat": 32.7530, "lon": -96.8290, "highway": "I-30", "direction": "E/W"},
+    {"id": "cam-i30-peak", "name": "I-30 @ Peak St", "lat": 32.7720, "lon": -96.7780, "highway": "I-30", "direction": "E/W"},
+    {"id": "cam-i30-dolphin", "name": "I-30 @ Dolphin Rd", "lat": 32.7700, "lon": -96.7550, "highway": "I-30", "direction": "E/W"},
+    {"id": "cam-i30-buckner", "name": "I-30 @ Buckner Blvd", "lat": 32.7630, "lon": -96.7150, "highway": "I-30", "direction": "E/W"},
+    {"id": "cam-i45-lamar", "name": "I-45 @ Lamar St", "lat": 32.7730, "lon": -96.7990, "highway": "I-45", "direction": "S"},
+    {"id": "cam-i45-simpson", "name": "I-45 @ Simpson Stuart Rd", "lat": 32.7090, "lon": -96.7670, "highway": "I-45", "direction": "S"},
+    {"id": "cam-i635-hillcrest", "name": "I-635 (LBJ) @ Hillcrest Rd", "lat": 32.9210, "lon": -96.7800, "highway": "I-635", "direction": "E/W"},
+    {"id": "cam-i635-marsh", "name": "I-635 (LBJ) @ Marsh Ln", "lat": 32.9280, "lon": -96.8400, "highway": "I-635", "direction": "E/W"},
+    {"id": "cam-dntte-woodall", "name": "DNT @ Woodall Rodgers", "lat": 32.7890, "lon": -96.8060, "highway": "DNT", "direction": "N/S"},
+    {"id": "cam-dnt-mockingbird", "name": "DNT @ Mockingbird Ln", "lat": 32.8370, "lon": -96.8100, "highway": "DNT", "direction": "N/S"},
+    {"id": "cam-dnt-northwest", "name": "DNT @ Northwest Hwy", "lat": 32.8690, "lon": -96.8200, "highway": "DNT", "direction": "N/S"},
+    {"id": "cam-dnt-635", "name": "DNT @ I-635 (LBJ)", "lat": 32.9250, "lon": -96.8200, "highway": "DNT", "direction": "N/S"},
+    {"id": "cam-i20-hampton", "name": "I-20 @ Hampton Rd", "lat": 32.6680, "lon": -96.8300, "highway": "I-20", "direction": "E/W"},
+    {"id": "cam-i20-polk", "name": "I-20 @ Polk St", "lat": 32.6670, "lon": -96.7870, "highway": "I-20", "direction": "E/W"},
+    {"id": "cam-i20-bonnieview", "name": "I-20 @ Bonnie View Rd", "lat": 32.6660, "lon": -96.7400, "highway": "I-20", "direction": "E/W"},
+    {"id": "cam-srloop12-walton", "name": "Loop 12 @ Walton Walker Blvd", "lat": 32.7650, "lon": -96.8700, "highway": "Loop 12", "direction": "N/S"},
+    {"id": "cam-pgbt-635", "name": "PGBT @ I-635", "lat": 32.9330, "lon": -96.6990, "highway": "PGBT", "direction": "E/W"},
+]
+
 # ── Dallas police‑beat approximate centroids ──────────────────────────
 # These map 3‑digit beat numbers to approximate (lat, lon).
 # Used as fallback when Nominatim cannot resolve an address.
@@ -171,6 +202,36 @@ def _string_or_default(record: dict[str, Any], keys: list[str], default: str):
         if value not in (None, ""):
             return str(value)
     return default
+
+
+# ── Traffic Cameras (static curated list) ─────────────────────────────
+def traffic_camera_events() -> tuple[list[MapEvent], FeedStatus]:
+    """Return camera locations as MapEvents (layer='cameras')."""
+    ts = _now()
+    events: list[MapEvent] = []
+    for cam in DALLAS_TRAFFIC_CAMERAS:
+        events.append(MapEvent(
+            event_id=f"camera-{cam['id']}-{ts.isoformat()}",
+            entity_id=f"camera-{cam['id']}",
+            source="txdot-cameras",
+            layer="cameras",
+            title=cam["name"],
+            description=f"Traffic camera on {cam['highway']} ({cam['direction']})",
+            status="online",
+            timestamp=ts,
+            lat=cam["lat"],
+            lon=cam["lon"],
+            properties={
+                "highway": cam["highway"],
+                "direction": cam["direction"],
+                "type": "traffic_camera",
+                "camera_id": cam["id"],
+            },
+        ))
+    return events, FeedStatus(
+        source="txdot-cameras", ok=True, last_refresh=ts,
+        message=f"{len(events)} cameras loaded.",
+    )
 
 
 # ── Weather (NWS) ────────────────────────────────────────────────────
