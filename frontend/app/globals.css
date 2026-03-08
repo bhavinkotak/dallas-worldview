@@ -1,5 +1,5 @@
 /* ================================================================
-   Dallas WorldView – Command Center Theme
+   US RealView – Command Center Theme
    ================================================================ */
 
 /* ── Reset ── */
@@ -104,6 +104,14 @@ a { color: #7dd3fc; text-decoration: none; }
 
 .search-group {
   display: flex; align-items: center; gap: 4px;
+}
+.state-select {
+  width: 140px;
+  flex-shrink: 0;
+  border-color: rgba(249,115,22,0.25) !important;
+}
+.state-select:focus {
+  border-color: rgba(249,115,22,0.5) !important;
 }
 .search-input {
   width: 200px;
@@ -549,6 +557,50 @@ select.search-input option {
   max-height: 260px;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+/* Weather hero */
+.insp-weather-hero {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 8px 0 16px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(249,115,22,0.12), rgba(234,88,12,0.06));
+  border: 1px solid rgba(249,115,22,0.15);
+}
+.insp-weather-temp {
+  font-size: 32px;
+  font-weight: 700;
+  color: #f97316;
+  letter-spacing: -0.02em;
+}
+.insp-weather-cond {
+  font-size: 14px;
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+/* Method / MO block */
+.insp-mo {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(15,23,42,0.6);
+  border: 1px solid rgba(148,163,184,0.08);
+  font-size: 12px;
+  color: #cbd5e1;
+  line-height: 1.5;
+}
+.insp-mo-label {
+  display: block;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #64748b;
+  font-weight: 600;
+  margin-bottom: 4px;
 }
 
 /* Camera preview in inspector */

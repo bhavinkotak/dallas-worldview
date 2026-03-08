@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 import asyncio
 import hashlib
@@ -21,8 +21,8 @@ MAPLARGE_FIELDS = [
     "name", "description", "route", "jurisdiction", "direction",
     "httpsurl", "imageurl", "active", "XY",
 ]
-# Dallas metro bounding box: lat 32.5–33.15, lon -97.5 to -96.4
-DALLAS_CAM_BBOX = {"min_lat": 32.5, "max_lat": 33.15, "min_lon": -97.5, "max_lon": -96.4}
+# DFW metro bounding box: expanded to cover McKinney, Frisco, Plano, etc.
+DALLAS_CAM_BBOX = {"min_lat": 32.5, "max_lat": 33.35, "min_lon": -97.5, "max_lon": -96.4}
 
 # In-memory camera cache (refreshed periodically alongside other feeds)
 _camera_cache: list[dict[str, Any]] = []
@@ -163,7 +163,7 @@ async def _geocode_address(block: str, street: str, client: httpx.AsyncClient) -
         resp = await client.get(
             "https://nominatim.openstreetmap.org/search",
             params={"q": address, "format": "json", "limit": "1", "countrycodes": "us"},
-            headers={"User-Agent": "DallasWorldView/1.0 (local demo)"},
+            headers={"User-Agent": "USRealView/1.0 (local demo)"},
         )
         if resp.status_code == 429:
             # Rate limited — do NOT cache, try again later
@@ -307,79 +307,255 @@ async def traffic_camera_events() -> tuple[list[MapEvent], FeedStatus]:
     )
 
 
+# ── Community Crime Map (LexisNexis) ─────────────────────────────────
+# Works across ALL DFW cities — not limited to Dallas Open Data.
+# API: https://communitycrimemap.com/api/
+CCM_BASE = "https://communitycrimemap.com/api/"
+_ccm_token: str | None = None
+_ccm_token_ts: datetime | None = None
+_CCM_TOKEN_TTL = 7200  # refresh JWT every 2 hours
+# Full DFW metro bounding box for agency + data queries
+DFW_BBOX = {"south": 32.50, "north": 33.35, "west": -97.50, "east": -96.40}
+
+
+async def _ccm_get_token(client: httpx.AsyncClient) -> str | None:
+    """Get an anonymous JWT from the Community Crime Map API."""
+    global _ccm_token, _ccm_token_ts
+    now = _now()
+    if _ccm_token and _ccm_token_ts and (now - _ccm_token_ts).total_seconds() < _CCM_TOKEN_TTL:
+        return _ccm_token
+    try:
+        resp = await client.get(CCM_BASE + "v1/auth/newToken")
+        resp.raise_for_status()
+        _ccm_token = resp.json()["data"]["jwt"]
+        _ccm_token_ts = now
+        return _ccm_token
+    except Exception as exc:
+        logger.warning("CCM token fetch failed: %s", exc)
+        return _ccm_token  # return stale if available
+
+
+async def _ccm_get_layers(client: httpx.AsyncClient, token: str) -> dict:
+    """Get crime type layers and build selection dict."""
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = await client.get(CCM_BASE + "v1/search/map-layers", headers=headers)
+    resp.raise_for_status()
+    selection: dict[str, dict] = {}
+    for group in resp.json().get("data", []):
+        for grp in group.get("groups", []):
+            for sg in grp.get("subgroups", []):
+                selection[str(sg["id"])] = {"selected": True}
+    return selection
+
+
+async def _ccm_get_agencies(client: httpx.AsyncClient, token: str, bbox: dict) -> dict:
+    """Get agencies for a bounding box and build agencies payload."""
+    headers = {"Authorization": f"Bearer {token}"}
+    params = {
+        "MinLatitude": bbox["south"], "MaxLatitude": bbox["north"],
+        "MinLongitude": bbox["west"], "MaxLongitude": bbox["east"],
+    }
+    resp = await client.get(CCM_BASE + "v1/search/agency-layers", headers=headers, params=params)
+    resp.raise_for_status()
+    agencies: dict[str, dict] = {}
+    for agency in resp.json().get("data", []):
+        # Select first 2 groups per agency with empty dict (= all layers)
+        for grp in agency.get("groups", [])[:2]:
+            agencies[str(grp["id"])] = {}
+    return agencies
+
+
+async def ccm_crime_events() -> tuple[list[MapEvent], FeedStatus]:
+    """Fetch recent crime data from Community Crime Map for all DFW agencies."""
+    ts = _now()
+    try:
+        async with httpx.AsyncClient(
+            timeout=25.0,
+            headers={
+                "User-Agent": "USRealView/1.0",
+                "Content-Type": "application/json",
+                "Origin": "https://communitycrimemap.com",
+                "Referer": "https://communitycrimemap.com/",
+            },
+        ) as client:
+            token = await _ccm_get_token(client)
+            if not token:
+                return [], FeedStatus(source="ccm-crime", ok=False, last_refresh=ts,
+                                      message="Failed to obtain CCM token.")
+
+            selection = await _ccm_get_layers(client, token)
+            agencies = await _ccm_get_agencies(client, token, DFW_BBOX)
+
+            if not selection:
+                return [], FeedStatus(source="ccm-crime", ok=False, last_refresh=ts,
+                                      message="No crime layers from CCM.")
+
+            end = datetime.now()
+            start = end - timedelta(days=14)
+
+            payload = {
+                "buffer": {"enabled": False, "restrictArea": False, "value": []},
+                "date": {"start": start.strftime("%m/%d/%Y"), "end": end.strftime("%m/%d/%Y")},
+                "agencies": agencies,
+                "layers": {"selection": selection},
+                "location": {
+                    "lat": (DFW_BBOX["south"] + DFW_BBOX["north"]) / 2,
+                    "lng": (DFW_BBOX["west"] + DFW_BBOX["east"]) / 2,
+                    "zoom": 10,
+                    "bounds": DFW_BBOX,
+                },
+                "analyticLayers": {"density": {"selected": False, "transparency": 60}},
+            }
+
+            headers = {"Authorization": f"Bearer {token}"}
+            resp = await client.post(CCM_BASE + "v1/search/load-data",
+                                     json=payload, headers=headers)
+            resp.raise_for_status()
+            result = resp.json()
+
+        data = result.get("data", result)
+        grid_eve = data.get("grid", {}).get("eve", [])
+
+        events: list[MapEvent] = []
+        for rec in grid_eve:
+            lat = _safe_float(rec.get("YCoordinate"))
+            lon = _safe_float(rec.get("XCoordinate"))
+            if lat is None or lon is None:
+                continue
+
+            ir = rec.get("IRNumber", "")
+            entity_key = ir or f"ccm-{len(events)}"
+            crime_class = rec.get("Class", rec.get("label", "Crime"))
+            crime_desc = rec.get("Crime", crime_class)
+            address = rec.get("AddressOfCrime", "")
+            dt_str = rec.get("DateTime", "")
+            agency = rec.get("Agency", "")
+
+            events.append(MapEvent(
+                event_id=f"ccm-{entity_key}-{ts.isoformat()}",
+                entity_id=f"ccm-{entity_key}",
+                source="ccm",
+                layer="crime",
+                title=crime_desc or crime_class,
+                description=f"{address} — {agency}" if address else agency,
+                status="reported",
+                timestamp=ts,
+                lat=lat,
+                lon=lon,
+                properties={
+                    "crime_class": crime_class,
+                    "crime": crime_desc,
+                    "ir_number": ir,
+                    "address": address,
+                    "location_type": rec.get("LocationType", ""),
+                    "datetime": dt_str,
+                    "agency": agency,
+                    "ucr_group": rec.get("UCRGroup", ""),
+                    "source_api": "communitycrimemap",
+                },
+            ))
+
+        logger.info("CCM: %d crime events from %d grid records", len(events), len(grid_eve))
+        return events, FeedStatus(
+            source="ccm-crime", ok=True, last_refresh=ts,
+            message=f"{len(events)} crime events from Community Crime Map ({len(grid_eve)} records).",
+        )
+
+    except Exception as exc:
+        logger.exception("CCM crime feed failed: %s", exc)
+        return [], FeedStatus(source="ccm-crime", ok=False, last_refresh=ts, message=str(exc))
+
+
 # ── Weather (NWS) ────────────────────────────────────────────────────
+# Query weather for multiple DFW locations so every city in the dropdown gets data.
+_WEATHER_LOCATIONS = [
+    {"name": "Dallas", "lat": 32.7767, "lon": -96.797},
+    {"name": "McKinney", "lat": 33.1972, "lon": -96.6397},
+]
+
+# NWS grid-point cache (lat,lon → forecastHourly URL) — won't change
+_nws_grid_cache: dict[str, str] = {}
+
+
 async def weather_events(settings: Settings) -> tuple[list[MapEvent], FeedStatus]:
     ts = _now()
-    headers = {
+    nws_headers = {
         "User-Agent": settings.nws_user_agent,
         "Accept": "application/geo+json, application/ld+json, application/json",
     }
+    all_events: list[MapEvent] = []
+    errors: list[str] = []
+
     try:
-        async with httpx.AsyncClient(timeout=15.0, headers=headers) as client:
-            point_resp = await client.get(f"https://api.weather.gov/points/{settings.dallas_lat},{settings.dallas_lon}")
-            point_resp.raise_for_status()
-            point_json = point_resp.json()
-            forecast_url = point_json["properties"]["forecastHourly"]
+        async with httpx.AsyncClient(timeout=15.0, headers=nws_headers) as client:
+            for loc in _WEATHER_LOCATIONS:
+                try:
+                    loc_key = f"{loc['lat']},{loc['lon']}"
+                    slug = loc["name"].lower().replace(" ", "-")
 
-            forecast_resp = await client.get(forecast_url)
-            forecast_resp.raise_for_status()
-            forecast_json = forecast_resp.json()
-            periods = forecast_json.get("properties", {}).get("periods", [])
-            current = periods[0] if periods else {}
+                    # Resolve grid point (cached)
+                    if loc_key not in _nws_grid_cache:
+                        pt = await client.get(f"https://api.weather.gov/points/{loc_key}")
+                        pt.raise_for_status()
+                        _nws_grid_cache[loc_key] = pt.json()["properties"]["forecastHourly"]
 
-            alerts_resp = await client.get(
-                f"https://api.weather.gov/alerts/active?point={settings.dallas_lat},{settings.dallas_lon}"
-            )
-            alerts_resp.raise_for_status()
-            alerts_json = alerts_resp.json()
+                    forecast_url = _nws_grid_cache[loc_key]
+                    fc = await client.get(forecast_url)
+                    fc.raise_for_status()
+                    periods = fc.json().get("properties", {}).get("periods", [])
+                    current = periods[0] if periods else {}
 
-        events = [
-            MapEvent(
-                event_id=f"nws-current-{ts.isoformat()}",
-                entity_id="nws-current-dallas",
-                source="nws",
-                layer="weather",
-                title="Dallas Weather",
-                description=current.get("detailedForecast") or current.get("shortForecast") or "Current weather summary.",
-                status="current",
-                timestamp=ts,
-                lat=settings.dallas_lat,
-                lon=settings.dallas_lon,
-                properties={
-                    "temperature": current.get("temperature"),
-                    "temperatureUnit": current.get("temperatureUnit"),
-                    "windSpeed": current.get("windSpeed"),
-                    "windDirection": current.get("windDirection"),
-                    "shortForecast": current.get("shortForecast"),
-                },
-            )
-        ]
+                    all_events.append(MapEvent(
+                        event_id=f"nws-current-{slug}-{ts.isoformat()}",
+                        entity_id=f"nws-current-{slug}",
+                        source="nws",
+                        layer="weather",
+                        title=f"{loc['name']} Weather",
+                        description=current.get("detailedForecast") or current.get("shortForecast") or "Current weather summary.",
+                        status="current",
+                        timestamp=ts,
+                        lat=loc["lat"],
+                        lon=loc["lon"],
+                        properties={
+                            "temperature": current.get("temperature"),
+                            "temperatureUnit": current.get("temperatureUnit"),
+                            "windSpeed": current.get("windSpeed"),
+                            "windDirection": current.get("windDirection"),
+                            "shortForecast": current.get("shortForecast"),
+                        },
+                    ))
 
-        for idx, feature in enumerate(alerts_json.get("features", []), start=1):
-            props = feature.get("properties", {}) or {}
-            events.append(
-                MapEvent(
-                    event_id=f"nws-alert-{idx}-{ts.isoformat()}",
-                    entity_id=f"nws-alert-{props.get('id', idx)}",
-                    source="nws",
-                    layer="weather",
-                    title=props.get("headline") or props.get("event") or "Weather Alert",
-                    description=props.get("description") or props.get("instruction") or "",
-                    status=props.get("severity") or "alert",
-                    timestamp=ts,
-                    lat=settings.dallas_lat,
-                    lon=settings.dallas_lon,
-                    properties={
-                        "event": props.get("event"),
-                        "severity": props.get("severity"),
-                        "urgency": props.get("urgency"),
-                        "certainty": props.get("certainty"),
-                        "areaDesc": props.get("areaDesc"),
-                    },
-                )
-            )
+                    # Alerts for this location
+                    al = await client.get(f"https://api.weather.gov/alerts/active?point={loc_key}")
+                    al.raise_for_status()
+                    for idx, feature in enumerate(al.json().get("features", []), start=1):
+                        props = feature.get("properties", {}) or {}
+                        all_events.append(MapEvent(
+                            event_id=f"nws-alert-{slug}-{idx}-{ts.isoformat()}",
+                            entity_id=f"nws-alert-{slug}-{props.get('id', idx)}",
+                            source="nws",
+                            layer="weather",
+                            title=props.get("headline") or props.get("event") or "Weather Alert",
+                            description=props.get("description") or props.get("instruction") or "",
+                            status=props.get("severity") or "alert",
+                            timestamp=ts,
+                            lat=loc["lat"],
+                            lon=loc["lon"],
+                            properties={
+                                "event": props.get("event"),
+                                "severity": props.get("severity"),
+                                "urgency": props.get("urgency"),
+                                "certainty": props.get("certainty"),
+                                "areaDesc": props.get("areaDesc"),
+                            },
+                        ))
+                except Exception as loc_exc:
+                    errors.append(f"{loc['name']}: {loc_exc}")
 
-        return events, FeedStatus(source="nws", ok=True, last_refresh=ts, message="NWS weather refreshed.")
+        msg = f"NWS weather: {len(all_events)} events for {len(_WEATHER_LOCATIONS)} locations."
+        if errors:
+            msg += f" Errors: {'; '.join(errors)}"
+        return all_events, FeedStatus(source="nws", ok=bool(all_events), last_refresh=ts, message=msg)
     except Exception as exc:
         return [], FeedStatus(source="nws", ok=False, last_refresh=ts, message=str(exc))
 

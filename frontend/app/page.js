@@ -1,9 +1,9 @@
 import dynamic from "next/dynamic";
 
-const DallasWorldView = dynamic(() => import("../components/DallasWorldView"), {
+const USRealView = dynamic(() => import("../components/USRealView"), {
   ssr: false,
 });
 
 export default function HomePage() {
-  return <DallasWorldView />;
+  return <USRealView />;
 }

@@ -1,8 +1,8 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "Dallas WorldView",
-  description: "Dallas-focused geospatial command center",
+  title: "US RealView",
+  description: "Real-time 3D geospatial operations center",
 };
 
 export default function RootLayout({ children }) {
