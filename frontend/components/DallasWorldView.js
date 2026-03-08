@@ -1,22 +1,43 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 
+/* ───────── constants ───────── */
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
-const CESIUM_JS = "https://unpkg.com/cesium@1.114.0/Build/Cesium/Cesium.js";
-const CESIUM_CSS = "https://unpkg.com/cesium@1.114.0/Build/Cesium/Widgets/widgets.css";
+const CESIUM_VERSION = "1.125.0";
+const CESIUM_CDN = `https://cesium.com/downloads/cesiumjs/releases/${CESIUM_VERSION}/Build/Cesium`;
+const CESIUM_JS = `${CESIUM_CDN}/Cesium.js`;
+const CESIUM_CSS = `${CESIUM_CDN}/Widgets/widgets.css`;
+
+/* Cesium Ion token – supply via env var for terrain & 3D buildings.
+   Without a valid token the viewer still works (OSM imagery + flat terrain). */
+const CESIUM_ION_TOKEN = process.env.NEXT_PUBLIC_CESIUM_ION_TOKEN || "";
+
+const DALLAS_CENTER = { lat: 32.7767, lon: -96.797 };
 
 const DALLAS_PLACES = [
-  { label: "Downtown Dallas", lat: 32.7767, lon: -96.797, height: 2200 },
-  { label: "Dallas City Hall", lat: 32.7763, lon: -96.7969, height: 1800 },
-  { label: "Deep Ellum", lat: 32.7843, lon: -96.781, height: 1800 },
-  { label: "Fair Park", lat: 32.7792, lon: -96.7597, height: 2200 },
-  { label: "Love Field", lat: 32.8471, lon: -96.8517, height: 4200 },
-  { label: "DFW Airport", lat: 32.8998, lon: -97.0403, height: 6500 },
-  { label: "Bishop Arts", lat: 32.7493, lon: -96.8278, height: 2200 },
-  { label: "White Rock Lake", lat: 32.8269, lon: -96.7246, height: 3600 },
+  { label: "Downtown Dallas", lat: 32.7767, lon: -96.797, height: 2200, heading: 15, pitch: -40 },
+  { label: "Dallas City Hall", lat: 32.7763, lon: -96.7969, height: 1600, heading: 0, pitch: -35 },
+  { label: "Deep Ellum", lat: 32.7843, lon: -96.781, height: 1600, heading: 45, pitch: -35 },
+  { label: "Fair Park", lat: 32.7792, lon: -96.7597, height: 2200, heading: -30, pitch: -40 },
+  { label: "Love Field", lat: 32.8471, lon: -96.8517, height: 4200, heading: 10, pitch: -50 },
+  { label: "DFW Airport", lat: 32.8998, lon: -97.0403, height: 6500, heading: 0, pitch: -55 },
+  { label: "Bishop Arts", lat: 32.7493, lon: -96.8278, height: 2200, heading: 20, pitch: -35 },
+  { label: "White Rock Lake", lat: 32.8269, lon: -96.7246, height: 3600, heading: -15, pitch: -45 },
+  { label: "Reunion Tower", lat: 32.7755, lon: -96.8088, height: 1400, heading: 30, pitch: -30 },
+  { label: "Uptown", lat: 32.7990, lon: -96.8025, height: 2000, heading: -10, pitch: -35 },
+  { label: "McKinney", lat: 33.1972, lon: -96.6397, height: 4500, heading: 0, pitch: -45 },
 ];
 
+/* ───────── layer config ───────── */
+const LAYER_META = {
+  weather: { label: "Weather", icon: "\u{1F324}\uFE0F", color: "#38bdf8", height: 120, priority: 1 },
+  traffic: { label: "Active Calls", icon: "\u{1F694}", color: "#f59e0b", height: 60, priority: 2 },
+  incidents: { label: "Incidents", icon: "\u{1F534}", color: "#ef4444", height: 90, priority: 3 },
+  crime: { label: "Crime", icon: "\u26A0\uFE0F", color: "#a855f7", height: 70, priority: 4 },
+};
+
+/* ───────── Cesium loader ───────── */
 function loadCesium() {
   if (typeof window === "undefined") return Promise.reject(new Error("Browser only"));
   if (window.Cesium) return Promise.resolve(window.Cesium);
@@ -29,49 +50,27 @@ function loadCesium() {
       link.href = CESIUM_CSS;
       document.head.appendChild(link);
     }
-
     const script = document.createElement("script");
     script.src = CESIUM_JS;
     script.async = true;
     script.onload = () => resolve(window.Cesium);
-    script.onerror = () => reject(new Error("Failed to load Cesium"));
+    script.onerror = () => reject(new Error("Failed to load CesiumJS"));
     document.body.appendChild(script);
   });
-
   return window.__cesiumPromise;
 }
 
+/* ───────── helpers ───────── */
 function colorForLayer(Cesium, layer) {
-  switch (layer) {
-    case "weather":
-      return Cesium.Color.fromCssColorString("#38bdf8");
-    case "traffic":
-      return Cesium.Color.fromCssColorString("#f59e0b");
-    case "incidents":
-      return Cesium.Color.fromCssColorString("#ef4444");
-    case "crime":
-      return Cesium.Color.fromCssColorString("#a855f7");
-    default:
-      return Cesium.Color.WHITE;
-  }
+  const hex = LAYER_META[layer]?.color || "#ffffff";
+  return Cesium.Color.fromCssColorString(hex);
 }
 
 function heightForLayer(layer) {
-  switch (layer) {
-    case "weather":
-      return 80;
-    case "traffic":
-      return 30;
-    case "incidents":
-      return 50;
-    case "crime":
-      return 40;
-    default:
-      return 20;
-  }
+  return LAYER_META[layer]?.height || 30;
 }
 
-function readCesiumProperty(value, Cesium) {
+function readCesiumProp(value, Cesium) {
   if (!value) return undefined;
   if (typeof value.getValue === "function") return value.getValue(Cesium.JulianDate.now());
   return value;
@@ -80,15 +79,28 @@ function readCesiumProperty(value, Cesium) {
 function buildEventUrl(mode, minutesAgo, layers) {
   const params = new URLSearchParams();
   if (layers) params.set("layers", layers);
-
-  if (mode === "live" || minutesAgo === 0) {
-    return `${API_BASE}/api/events/current?${params.toString()}`;
-  }
-
+  if (mode === "live" || minutesAgo === 0) return `${API_BASE}/api/events/current?${params}`;
   params.set("minutes_ago", String(minutesAgo));
-  return `${API_BASE}/api/events/replay?${params.toString()}`;
+  return `${API_BASE}/api/events/replay?${params}`;
 }
 
+function timeAgo(iso) {
+  if (!iso) return "";
+  const diff = Date.now() - new Date(iso).getTime();
+  if (diff < 60000) return "just now";
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  return `${Math.floor(diff / 3600000)}h ago`;
+}
+
+function countByLayer(events) {
+  const counts = {};
+  events.forEach((e) => (counts[e.layer] = (counts[e.layer] || 0) + 1));
+  return counts;
+}
+
+/* ================================================================
+   MAIN COMPONENT
+   ================================================================ */
 export default function DallasWorldView() {
   const containerRef = useRef(null);
   const viewerRef = useRef(null);
@@ -96,6 +108,7 @@ export default function DallasWorldView() {
   const pickHandlerRef = useRef(null);
   const entityMapRef = useRef(new Map());
   const fetchTimerRef = useRef(null);
+  const buildingsRef = useRef(null);
 
   const [layers, setLayers] = useState([]);
   const [selectedLayers, setSelectedLayers] = useState(["weather", "traffic", "incidents", "crime"]);
@@ -104,49 +117,62 @@ export default function DallasWorldView() {
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [mode, setMode] = useState("live");
   const [minutesAgo, setMinutesAgo] = useState(0);
-  const [query, setQuery] = useState("Downtown Dallas");
+  const [query, setQuery] = useState("");
   const [asOf, setAsOf] = useState(new Date().toISOString());
-  const [status, setStatus] = useState("Loading map…");
+  const [status, setStatus] = useState("Initializing\u2026");
+  const [panelOpen, setPanelOpen] = useState(true);
+  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [buildingsVisible, setBuildingsVisible] = useState(true);
 
-  const selectedLayerString = useMemo(() => selectedLayers.join(","), [selectedLayers]);
+  const selectedLayerStr = useMemo(() => selectedLayers.join(","), [selectedLayers]);
+
   const visibleEvents = useMemo(
-    () => events.filter((event) => selectedLayers.includes(event.layer)),
+    () => events.filter((e) => selectedLayers.includes(e.layer)),
     [events, selectedLayers]
   );
 
+  const layerCounts = useMemo(() => countByLayer(visibleEvents), [visibleEvents]);
+
+  /* -- bootstrap: fetch layers + feeds -- */
   useEffect(() => {
     let ignore = false;
-
-    async function bootstrap() {
+    (async () => {
       try {
-        const [layerRes, feedRes] = await Promise.all([
+        const [lr, fr] = await Promise.all([
           fetch(`${API_BASE}/api/layers`),
           fetch(`${API_BASE}/api/feed-status`),
         ]);
-        const layerJson = await layerRes.json();
-        const feedJson = await feedRes.json();
+        const lj = await lr.json();
+        const fj = await fr.json();
         if (!ignore) {
-          setLayers(layerJson.layers || []);
-          setFeeds(feedJson.feeds || []);
+          setLayers(lj.layers || []);
+          setFeeds(fj.feeds || []);
         }
-      } catch (error) {
-        if (!ignore) setStatus(`Metadata load failed: ${error.message}`);
+      } catch (err) {
+        if (!ignore) setStatus(`Metadata error: ${err.message}`);
       }
-    }
-
-    bootstrap();
-    return () => {
-      ignore = true;
-    };
+    })();
+    return () => { ignore = true; };
   }, []);
 
+  /* -- init CesiumJS viewer -- */
   useEffect(() => {
     let disposed = false;
 
-    async function initViewer() {
+    async function init() {
       try {
         const Cesium = await loadCesium();
         if (disposed || !containerRef.current || viewerRef.current) return;
+
+        /* Set Ion token only if provided */
+        if (CESIUM_ION_TOKEN) {
+          Cesium.Ion.defaultAccessToken = CESIUM_ION_TOKEN;
+        }
+
+        /* Base imagery – use OpenStreetMap (no token needed) */
+        const osmImagery = new Cesium.OpenStreetMapImageryProvider({
+          url: "https://tile.openstreetmap.org/",
+        });
 
         const viewer = new Cesium.Viewer(containerRef.current, {
           animation: false,
@@ -161,81 +187,121 @@ export default function DallasWorldView() {
           fullscreenButton: false,
           shouldAnimate: true,
           requestRenderMode: false,
-          imageryProvider: new Cesium.OpenStreetMapImageryProvider({
-            url: "https://tile.openstreetmap.org/",
-          }),
+          baseLayer: new Cesium.ImageryLayer(osmImagery),
         });
 
-        viewer.scene.backgroundColor = Cesium.Color.fromCssColorString("#0f172a");
-        viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString("#334155");
-        viewer.scene.globe.showGroundAtmosphere = true;
-        viewer.scene.globe.enableLighting = true;
-        viewer.scene.globe.depthTestAgainstTerrain = false;
-        viewer.scene.skyAtmosphere.show = true;
-        viewer.scene.fog.enabled = true;
+        /* Scene settings */
+        const scene = viewer.scene;
+        scene.backgroundColor = Cesium.Color.fromCssColorString("#070d1a");
+        scene.globe.baseColor = Cesium.Color.fromCssColorString("#1e293b");
+        scene.globe.showGroundAtmosphere = true;
+        scene.globe.enableLighting = false;
+        scene.globe.depthTestAgainstTerrain = false;
+        scene.skyAtmosphere.show = true;
+        scene.fog.enabled = true;
+        scene.fog.density = 0.0003;
+        scene.fog.minimumBrightness = 0.03;
+        scene.screenSpaceCameraController.enableCollisionDetection = true;
+        scene.highDynamicRange = false;
+        scene.postProcessStages.fxaa.enabled = true;
 
+        /* If we have a valid Ion token, try to add world terrain + 3D buildings */
+        if (CESIUM_ION_TOKEN) {
+          try {
+            const terrain = await Cesium.CesiumTerrainProvider.fromIonAssetId(1);
+            viewer.terrainProvider = terrain;
+            scene.globe.depthTestAgainstTerrain = true;
+          } catch (err) {
+            console.warn("Ion terrain unavailable:", err.message);
+          }
+
+          try {
+            const buildings = await Cesium.createOsmBuildingsAsync();
+            buildings.style = new Cesium.Cesium3DTileStyle({
+              color: {
+                conditions: [
+                  ["${feature['cesium#estimatedHeight']} >= 100", "color('#60a5fa', 0.65)"],
+                  ["${feature['cesium#estimatedHeight']} >= 50", "color('#3b82f6', 0.55)"],
+                  ["true", "color('#2563eb', 0.42)"],
+                ],
+              },
+              show: true,
+            });
+            scene.primitives.add(buildings);
+            buildingsRef.current = buildings;
+          } catch (err) {
+            console.warn("OSM Buildings unavailable:", err.message);
+          }
+        }
+
+        /* Custom data source for event markers */
         const eventSource = new Cesium.CustomDataSource("events");
         eventSource.clustering.enabled = true;
-        eventSource.clustering.pixelRange = 40;
+        eventSource.clustering.pixelRange = 45;
         eventSource.clustering.minimumClusterSize = 4;
-        eventSource.clustering.clusterEvent.addEventListener((clusteredEntities, cluster) => {
+        eventSource.clustering.clusterEvent.addEventListener((clustered, cluster) => {
           cluster.label.show = true;
-          cluster.label.text = String(clusteredEntities.length);
+          cluster.label.text = String(clustered.length);
+          cluster.label.font = "600 13px Inter, sans-serif";
           cluster.label.fillColor = Cesium.Color.WHITE;
           cluster.label.outlineColor = Cesium.Color.BLACK;
-          cluster.label.outlineWidth = 2;
+          cluster.label.outlineWidth = 3;
+          cluster.label.style = Cesium.LabelStyle.FILL_AND_OUTLINE;
           cluster.label.showBackground = true;
           cluster.label.backgroundColor = Cesium.Color.fromCssColorString("#0f172a").withAlpha(0.9);
+          cluster.label.backgroundPadding = new Cesium.Cartesian2(8, 5);
           cluster.billboard.show = false;
           cluster.point.show = true;
-          cluster.point.pixelSize = Math.min(36, 14 + clusteredEntities.length * 0.35);
-          cluster.point.color = Cesium.Color.fromCssColorString("#38bdf8").withAlpha(0.85);
-          cluster.point.outlineColor = Cesium.Color.WHITE;
-          cluster.point.outlineWidth = 1;
+          cluster.point.pixelSize = Math.min(40, 16 + clustered.length * 0.4);
+          cluster.point.color = Cesium.Color.fromCssColorString("#38bdf8").withAlpha(0.8);
+          cluster.point.outlineColor = Cesium.Color.WHITE.withAlpha(0.6);
+          cluster.point.outlineWidth = 2;
         });
         viewer.dataSources.add(eventSource);
 
+        /* Fly to Dallas */
         viewer.camera.flyTo({
-          destination: Cesium.Cartesian3.fromDegrees(-96.797, 32.7767, 3200),
+          destination: Cesium.Cartesian3.fromDegrees(DALLAS_CENTER.lon, DALLAS_CENTER.lat, 3500),
           orientation: {
             heading: Cesium.Math.toRadians(15),
-            pitch: Cesium.Math.toRadians(-55),
+            pitch: Cesium.Math.toRadians(-42),
             roll: 0,
           },
-          duration: 1.8,
+          duration: 2.5,
         });
 
-        const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+        /* Click handler */
+        const handler = new Cesium.ScreenSpaceEventHandler(scene.canvas);
         handler.setInputAction((click) => {
-          const picked = viewer.scene.pick(click.position);
+          const picked = scene.pick(click.position);
           if (!picked || !picked.id || !picked.id.properties) return;
-          const props = picked.id.properties;
+          const p = picked.id.properties;
           setSelectedEvent({
-            event_id: readCesiumProperty(props.event_id, Cesium),
-            entity_id: readCesiumProperty(props.entity_id, Cesium),
-            title: readCesiumProperty(props.title, Cesium),
-            description: readCesiumProperty(props.description, Cesium),
-            layer: readCesiumProperty(props.layer, Cesium),
-            source: readCesiumProperty(props.source, Cesium),
-            status: readCesiumProperty(props.status, Cesium),
-            lat: readCesiumProperty(props.lat, Cesium),
-            lon: readCesiumProperty(props.lon, Cesium),
-            timestamp: readCesiumProperty(props.timestamp, Cesium),
-            properties: readCesiumProperty(props.properties, Cesium),
+            event_id: readCesiumProp(p.event_id, Cesium),
+            entity_id: readCesiumProp(p.entity_id, Cesium),
+            title: readCesiumProp(p.title, Cesium),
+            description: readCesiumProp(p.description, Cesium),
+            layer: readCesiumProp(p.layer, Cesium),
+            source: readCesiumProp(p.source, Cesium),
+            status: readCesiumProp(p.status, Cesium),
+            lat: readCesiumProp(p.lat, Cesium),
+            lon: readCesiumProp(p.lon, Cesium),
+            timestamp: readCesiumProp(p.timestamp, Cesium),
+            properties: readCesiumProp(p.properties, Cesium),
           });
+          setInspectorOpen(true);
         }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
 
         viewerRef.current = viewer;
         eventSourceRef.current = eventSource;
         pickHandlerRef.current = handler;
-        setStatus("Dallas WorldView ready");
-      } catch (error) {
-        setStatus(`Viewer init failed: ${error.message}`);
+        setStatus("Ready");
+      } catch (err) {
+        setStatus(`Init failed: ${err.message}`);
       }
     }
 
-    initViewer();
-
+    init();
     return () => {
       disposed = true;
       if (fetchTimerRef.current) clearTimeout(fetchTimerRef.current);
@@ -248,325 +314,398 @@ export default function DallasWorldView() {
     };
   }, []);
 
+  /* -- poll events -- */
   useEffect(() => {
     let ignore = false;
 
-    async function refreshEvents() {
+    async function refresh() {
       try {
-        const url = buildEventUrl(mode, minutesAgo, selectedLayerString);
-
-        const [eventsRes, feedRes] = await Promise.all([
+        const url = buildEventUrl(mode, minutesAgo, selectedLayerStr);
+        const [er, fr] = await Promise.all([
           fetch(url, { cache: "no-store" }),
           fetch(`${API_BASE}/api/feed-status`, { cache: "no-store" }),
         ]);
-
-        const eventsJson = await eventsRes.json();
-        const feedJson = await feedRes.json();
-
+        const ej = await er.json();
+        const fj = await fr.json();
         if (!ignore) {
-          setEvents(eventsJson.events || []);
-          setAsOf(eventsJson.as_of || new Date().toISOString());
-          setFeeds(feedJson.feeds || []);
-          setStatus(`${eventsJson.count || 0} entities visible`);
+          setEvents(ej.events || []);
+          setAsOf(ej.as_of || new Date().toISOString());
+          setFeeds(fj.feeds || []);
+          setStatus(`${ej.count || 0} events`);
         }
-      } catch (error) {
-        if (!ignore) setStatus(`Data refresh failed: ${error.message}`);
+      } catch (err) {
+        if (!ignore) setStatus(`Refresh error: ${err.message}`);
       }
     }
 
     if (fetchTimerRef.current) clearTimeout(fetchTimerRef.current);
-    fetchTimerRef.current = setTimeout(refreshEvents, 120);
-    const timer = setInterval(refreshEvents, mode === "live" && minutesAgo === 0 ? 15000 : 30000);
+    fetchTimerRef.current = setTimeout(refresh, 150);
+    const iv = setInterval(refresh, mode === "live" && minutesAgo === 0 ? 15000 : 30000);
+    return () => { ignore = true; clearTimeout(fetchTimerRef.current); clearInterval(iv); };
+  }, [mode, minutesAgo, selectedLayerStr]);
 
-    return () => {
-      ignore = true;
-      if (fetchTimerRef.current) clearTimeout(fetchTimerRef.current);
-      clearInterval(timer);
-    };
-  }, [mode, minutesAgo, selectedLayerString]);
-
+  /* -- sync entities on map -- */
   useEffect(() => {
-    async function syncEntities() {
-      const Cesium = window.Cesium;
-      if (!Cesium || !eventSourceRef.current) return;
+    const Cesium = window.Cesium;
+    if (!Cesium || !eventSourceRef.current) return;
 
-      const eventSource = eventSourceRef.current;
-      const entityMap = entityMapRef.current;
-      const incomingIds = new Set();
+    const ds = eventSourceRef.current;
+    const map = entityMapRef.current;
+    const live = new Set();
 
-      visibleEvents.forEach((event) => {
-        incomingIds.add(event.entity_id);
-        const color = colorForLayer(Cesium, event.layer);
-        const altitude = heightForLayer(event.layer);
-        let entity = entityMap.get(event.entity_id);
+    visibleEvents.forEach((ev) => {
+      live.add(ev.entity_id);
+      const c = colorForLayer(Cesium, ev.layer);
+      const alt = heightForLayer(ev.layer);
+      let ent = map.get(ev.entity_id);
 
-        if (!entity) {
-          entity = eventSource.entities.add({
-            id: event.entity_id,
-            position: Cesium.Cartesian3.fromDegrees(event.lon, event.lat, altitude / 2),
-            point: {
-              pixelSize: event.layer === "weather" ? 14 : 11,
-              color,
-              outlineColor: Cesium.Color.BLACK,
-              outlineWidth: 1,
-              scaleByDistance: new Cesium.NearFarScalar(2000, 1.2, 120000, 0.55),
-              translucencyByDistance: new Cesium.NearFarScalar(2000, 1.0, 160000, 0.15),
-              distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 250000),
-              heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
-            },
-            cylinder: {
-              length: altitude,
-              topRadius: 40,
-              bottomRadius: 40,
-              material: color.withAlpha(0.6),
-              outline: true,
-              outlineColor: color.withAlpha(0.9),
-              outlineWidth: 1,
-              distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 30000),
-            },
-            label: {
-              text: event.title,
-              scale: 0.45,
-              show: true,
-              pixelOffset: new Cesium.Cartesian2(0, -22),
-              fillColor: color,
-              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-              outlineColor: Cesium.Color.BLACK,
-              outlineWidth: 2,
-              horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-              distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 18000),
-            },
-            properties: event,
-          });
-          entityMap.set(event.entity_id, entity);
-        } else {
-          entity.position = Cesium.Cartesian3.fromDegrees(event.lon, event.lat, altitude / 2);
-          entity.properties = event;
-          if (entity.point) entity.point.color = color;
-          if (entity.cylinder) {
-            entity.cylinder.material = color.withAlpha(0.6);
-            entity.cylinder.outlineColor = color.withAlpha(0.9);
-          }
-          if (entity.label) {
-            entity.label.text = event.title;
-            entity.label.fillColor = color;
-          }
+      if (!ent) {
+        ent = ds.entities.add({
+          id: ev.entity_id,
+          position: Cesium.Cartesian3.fromDegrees(ev.lon, ev.lat, alt / 2),
+          point: {
+            pixelSize: ev.layer === "weather" ? 14 : 10,
+            color: c,
+            outlineColor: Cesium.Color.BLACK.withAlpha(0.7),
+            outlineWidth: 1.5,
+            scaleByDistance: new Cesium.NearFarScalar(1500, 1.3, 150000, 0.5),
+            translucencyByDistance: new Cesium.NearFarScalar(1500, 1.0, 180000, 0.1),
+            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 300000),
+            heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+          },
+          cylinder: {
+            length: alt,
+            topRadius: 35,
+            bottomRadius: 35,
+            material: c.withAlpha(0.5),
+            outline: true,
+            outlineColor: c.withAlpha(0.85),
+            outlineWidth: 1,
+            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 25000),
+          },
+          label: {
+            text: ev.title && ev.title.length > 42 ? ev.title.slice(0, 40) + "\u2026" : ev.title,
+            font: "600 11px Inter, sans-serif",
+            scale: 1.0,
+            show: true,
+            pixelOffset: new Cesium.Cartesian2(0, -20),
+            fillColor: Cesium.Color.WHITE,
+            style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+            outlineColor: Cesium.Color.BLACK,
+            outlineWidth: 3,
+            horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 15000),
+            showBackground: true,
+            backgroundColor: Cesium.Color.fromCssColorString("#0f172a").withAlpha(0.75),
+            backgroundPadding: new Cesium.Cartesian2(6, 4),
+          },
+          properties: ev,
+        });
+        map.set(ev.entity_id, ent);
+      } else {
+        ent.position = Cesium.Cartesian3.fromDegrees(ev.lon, ev.lat, alt / 2);
+        ent.properties = ev;
+        if (ent.point) ent.point.color = c;
+        if (ent.cylinder) {
+          ent.cylinder.material = c.withAlpha(0.5);
+          ent.cylinder.outlineColor = c.withAlpha(0.85);
         }
-      });
-
-      for (const [entityId, entity] of entityMap.entries()) {
-        if (!incomingIds.has(entityId)) {
-          eventSource.entities.remove(entity);
-          entityMap.delete(entityId);
+        if (ent.label) {
+          ent.label.text = ev.title && ev.title.length > 42 ? ev.title.slice(0, 40) + "\u2026" : ev.title;
         }
       }
+    });
 
-      if (viewerRef.current) viewerRef.current.scene.requestRender();
+    for (const [id, e] of map.entries()) {
+      if (!live.has(id)) { ds.entities.remove(e); map.delete(id); }
     }
 
-    syncEntities();
+    if (viewerRef.current) viewerRef.current.scene.requestRender();
   }, [visibleEvents]);
 
-  function toggleLayer(layerId) {
-    setSelectedLayers((current) => {
-      if (current.includes(layerId)) return current.filter((item) => item !== layerId);
-      return [...current, layerId];
-    });
-  }
+  /* -- buildings toggle -- */
+  useEffect(() => {
+    if (buildingsRef.current) buildingsRef.current.show = buildingsVisible;
+    if (viewerRef.current) viewerRef.current.scene.requestRender();
+  }, [buildingsVisible]);
 
-  function flyToPreset() {
+  /* -- actions -- */
+  const toggleLayer = useCallback((lid) => {
+    setSelectedLayers((cur) =>
+      cur.includes(lid) ? cur.filter((l) => l !== lid) : [...cur, lid]
+    );
+  }, []);
+
+  const flyToPreset = useCallback(() => {
     const Cesium = window.Cesium;
     const viewer = viewerRef.current;
     if (!Cesium || !viewer) return;
-
-    const preset =
-      DALLAS_PLACES.find((place) => place.label.toLowerCase().includes(query.toLowerCase())) || DALLAS_PLACES[0];
-
+    const p = DALLAS_PLACES.find((pl) => pl.label.toLowerCase().includes(query.toLowerCase())) || DALLAS_PLACES[0];
     viewer.camera.flyTo({
-      destination: Cesium.Cartesian3.fromDegrees(preset.lon, preset.lat, preset.height),
+      destination: Cesium.Cartesian3.fromDegrees(p.lon, p.lat, p.height),
       orientation: {
-        heading: Cesium.Math.toRadians(10),
-        pitch: Cesium.Math.toRadians(-45),
+        heading: Cesium.Math.toRadians(p.heading || 15),
+        pitch: Cesium.Math.toRadians(p.pitch || -40),
         roll: 0,
       },
-      duration: 1.6,
+      duration: 1.8,
     });
-  }
+  }, [query]);
 
-  const totalFeedsHealthy = feeds.filter((feed) => feed.ok).length;
-  const layerFallback = [
-    { id: "weather", label: "Weather", count: 0 },
-    { id: "traffic", label: "Traffic / Active Calls", count: 0 },
-    { id: "incidents", label: "Incidents", count: 0 },
-    { id: "crime", label: "Crime", count: 0 },
-  ];
+  const flyToEvent = useCallback((ev) => {
+    const Cesium = window.Cesium;
+    const viewer = viewerRef.current;
+    if (!Cesium || !viewer) return;
+    setSelectedEvent(ev);
+    setInspectorOpen(true);
+    viewer.camera.flyTo({
+      destination: Cesium.Cartesian3.fromDegrees(ev.lon, ev.lat, 1200),
+      orientation: {
+        heading: Cesium.Math.toRadians(0),
+        pitch: Cesium.Math.toRadians(-35),
+        roll: 0,
+      },
+      duration: 1.2,
+    });
+  }, []);
 
+  const totalHealthy = feeds.filter((f) => f.ok).length;
+  const layerList = layers.length ? layers : Object.entries(LAYER_META).map(([id, m]) => ({ id, label: m.label, count: 0 }));
+
+  /* ================================================================
+     JSX
+     ================================================================ */
   return (
     <div className="app-shell">
+      {/* -- 3D Map -- */}
       <div ref={containerRef} className="map-host" />
 
-      <div className="topbar">
+      {/* -- Top Bar -- */}
+      <header className="topbar">
         <div className="brand">
-          <h1>Dallas WorldView</h1>
-          <p>3D city operations view with live layers, crime overlays, replay, and Dallas presets.</p>
-        </div>
-
-        <div className="controls">
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search Dallas preset"
-            list="dallas-presets"
-          />
-          <datalist id="dallas-presets">
-            {DALLAS_PLACES.map((place) => (
-              <option key={place.label} value={place.label} />
-            ))}
-          </datalist>
-
-          <button onClick={flyToPreset}>Fly to place</button>
-
-          <select value={mode} onChange={(event) => setMode(event.target.value)}>
-            <option value="live">Live</option>
-            <option value="replay">Replay</option>
-          </select>
-
-          <button
-            onClick={() => {
-              setMode("live");
-              setMinutesAgo(0);
-            }}
-          >
-            Go live
-          </button>
-
-          <span className="badge">{status}</span>
-        </div>
-      </div>
-
-      <aside className="side-panel">
-        <h2 className="section-title">Layer controls</h2>
-
-        <div className="kpi-grid">
-          <div className="kpi">
-            <span className="muted">Entities</span>
-            <strong>{visibleEvents.length}</strong>
-          </div>
-          <div className="kpi">
-            <span className="muted">Healthy feeds</span>
-            <strong>
-              {totalFeedsHealthy}/{feeds.length || 1}
-            </strong>
-          </div>
-        </div>
-
-        {(layers.length ? layers : layerFallback).map((layer) => (
-          <div key={layer.id} className="layer-item">
-            <div className="row">
-              <div>
-                <div>{layer.label}</div>
-                <div className="muted">{layer.count} current entities</div>
-              </div>
-              <label className="checkbox-row">
-                <input
-                  type="checkbox"
-                  checked={selectedLayers.includes(layer.id)}
-                  onChange={() => toggleLayer(layer.id)}
-                />
-                <span className="small">Visible</span>
-              </label>
-            </div>
-          </div>
-        ))}
-
-        <h2 className="section-title">Feed health</h2>
-        {feeds.length === 0 ? (
-          <div className="empty-state">Waiting for backend feed status.</div>
-        ) : (
-          feeds.map((feed) => (
-            <div key={feed.source} className="feed-item">
-              <div className="row">
-                <strong>{feed.source}</strong>
-                <span className="badge">{feed.ok ? "ok" : "degraded"}</span>
-              </div>
-              <div className="muted">{feed.message || "No message"}</div>
-            </div>
-          ))
-        )}
-
-        <h2 className="section-title">Visible entities</h2>
-        {visibleEvents.length === 0 ? (
-          <div className="empty-state">No entities for the selected filters.</div>
-        ) : (
-          visibleEvents.slice(0, 30).map((event) => (
-            <div key={event.event_id} className="event-row" onClick={() => setSelectedEvent(event)}>
-              <div className="row">
-                <strong>{event.title}</strong>
-                <span className="badge">{event.layer}</span>
-              </div>
-              <div className="muted">{event.description || "No description"}</div>
-            </div>
-          ))
-        )}
-      </aside>
-
-      <aside className="inspector">
-        <h2 className="section-title">Inspector</h2>
-        {!selectedEvent ? (
-          <div className="empty-state">Select a marker or list item to inspect layer details.</div>
-        ) : (
-          <>
-            <div className="event-row">
-              <div className="row">
-                <strong>{selectedEvent.title}</strong>
-                <span className="badge">{selectedEvent.layer}</span>
-              </div>
-              <p className="small">{selectedEvent.description || "No description"}</p>
-              <div className="muted">Source: {selectedEvent.source}</div>
-              <div className="muted">Status: {selectedEvent.status}</div>
-              <div className="muted">Time: {String(selectedEvent.timestamp)}</div>
-              <div className="muted">
-                Lat/Lon: {Number(selectedEvent.lat).toFixed(4)}, {Number(selectedEvent.lon).toFixed(4)}
-              </div>
-            </div>
-
-            <h2 className="section-title">Properties</h2>
-            <div className="event-row small">
-              <pre style={{ whiteSpace: "pre-wrap", margin: 0 }}>
-                {JSON.stringify(selectedEvent.properties || {}, null, 2)}
-              </pre>
-            </div>
-          </>
-        )}
-      </aside>
-
-      <div className="timeline">
-        <div className="row" style={{ marginBottom: 10 }}>
+          <div className="brand-icon">{"\u25C6"}</div>
           <div>
-            <div className="section-title" style={{ margin: 0 }}>
-              Timeline
-            </div>
-            <div className="muted">As of {new Date(asOf).toLocaleString()}</div>
+            <h1>Dallas WorldView</h1>
+            <span className="brand-sub">Real-time 3D City Operations</span>
           </div>
-          <div className="badge">{mode === "live" && minutesAgo === 0 ? "Live now" : `${minutesAgo} min ago`}</div>
+        </div>
+
+        <nav className="top-controls">
+          <div className="search-group">
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && flyToPreset()}
+              placeholder="Fly to location\u2026"
+              list="preset-list"
+              className="search-input"
+            />
+            <datalist id="preset-list">
+              {DALLAS_PLACES.map((p) => <option key={p.label} value={p.label} />)}
+            </datalist>
+            <button onClick={flyToPreset} className="btn btn-primary" title="Fly">{"\u2708"}</button>
+          </div>
+
+          <div className="btn-group">
+            <button
+              className={`btn ${mode === "live" && minutesAgo === 0 ? "btn-live" : "btn-ghost"}`}
+              onClick={() => { setMode("live"); setMinutesAgo(0); }}
+            >
+              <span className="live-dot" /> Live
+            </button>
+            <button
+              className={`btn ${buildingsVisible ? "btn-active" : "btn-ghost"}`}
+              onClick={() => setBuildingsVisible(!buildingsVisible)}
+              title="Toggle 3D buildings"
+            >
+              {"\uD83C\uDFD9\uFE0F"}
+            </button>
+          </div>
+
+          <div className="status-pill">
+            <span className={`status-dot ${status === "Ready" || status.includes("events") ? "ok" : ""}`} />
+            {status}
+          </div>
+        </nav>
+      </header>
+
+      {/* -- Left Panel Toggle -- */}
+      <button
+        className="panel-toggle left-toggle"
+        onClick={() => setPanelOpen(!panelOpen)}
+        title={panelOpen ? "Collapse" : "Expand"}
+      >
+        {panelOpen ? "\u25C2" : "\u25B8"}
+      </button>
+
+      {/* -- Left Panel -- */}
+      <aside className={`side-panel ${panelOpen ? "open" : "closed"}`}>
+        {/* KPI Row */}
+        <div className="kpi-row">
+          <div className="kpi">
+            <span className="kpi-value">{visibleEvents.length}</span>
+            <span className="kpi-label">Entities</span>
+          </div>
+          <div className="kpi">
+            <span className="kpi-value">{totalHealthy}/{feeds.length || "\u2013"}</span>
+            <span className="kpi-label">Feeds OK</span>
+          </div>
+        </div>
+
+        {/* Layer toggles */}
+        <div className="section-header">
+          <h2>Layers</h2>
+        </div>
+        <div className="layer-list">
+          {layerList.map((l) => {
+            const meta = LAYER_META[l.id] || {};
+            const active = selectedLayers.includes(l.id);
+            return (
+              <button
+                key={l.id}
+                className={`layer-chip ${active ? "active" : ""}`}
+                style={{ "--layer-color": meta.color || "#7dd3fc" }}
+                onClick={() => toggleLayer(l.id)}
+              >
+                <span className="layer-dot" />
+                <span className="layer-chip-label">{meta.icon} {meta.label || l.label}</span>
+                <span className="layer-chip-count">{layerCounts[l.id] || 0}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Feed health */}
+        <div className="section-header">
+          <h2>Feed Status</h2>
+        </div>
+        {feeds.length === 0 ? (
+          <p className="empty">Waiting for backend\u2026</p>
+        ) : (
+          <div className="feed-list">
+            {feeds.map((f) => (
+              <div key={f.source} className={`feed-row ${f.ok ? "ok" : "err"}`}>
+                <span className="feed-indicator" />
+                <div className="feed-info">
+                  <strong>{f.source}</strong>
+                  <span className="feed-msg">{f.message || "Active"}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Event list */}
+        <div className="section-header">
+          <h2>Events <span className="header-count">{visibleEvents.length}</span></h2>
+        </div>
+        <div className="event-list">
+          {visibleEvents.length === 0 ? (
+            <p className="empty">No events matching filters.</p>
+          ) : (
+            visibleEvents.slice(0, 50).map((ev) => {
+              const meta = LAYER_META[ev.layer] || {};
+              return (
+                <button
+                  key={ev.event_id}
+                  className={`event-card ${selectedEvent?.event_id === ev.event_id ? "selected" : ""}`}
+                  onClick={() => flyToEvent(ev)}
+                >
+                  <div className="event-card-top">
+                    <span className="event-badge" style={{ background: meta.color || "#555" }}>
+                      {meta.icon}
+                    </span>
+                    <span className="event-title">{ev.title}</span>
+                  </div>
+                  <div className="event-card-bottom">
+                    <span className="event-desc">{ev.description || "No detail"}</span>
+                    <span className="event-time">{timeAgo(ev.timestamp)}</span>
+                  </div>
+                </button>
+              );
+            })
+          )}
+        </div>
+      </aside>
+
+      {/* -- Right Inspector Panel -- */}
+      {inspectorOpen && selectedEvent && (
+        <aside className="inspector">
+          <div className="inspector-header">
+            <h2>Inspector</h2>
+            <button className="btn-close" onClick={() => setInspectorOpen(false)}>{"\u2715"}</button>
+          </div>
+
+          <div className="inspector-body">
+            <div className="insp-badge-row">
+              <span className="event-badge lg" style={{ background: LAYER_META[selectedEvent.layer]?.color || "#555" }}>
+                {LAYER_META[selectedEvent.layer]?.icon}
+              </span>
+              <div>
+                <h3 className="insp-title">{selectedEvent.title}</h3>
+                <span className="insp-layer">{LAYER_META[selectedEvent.layer]?.label || selectedEvent.layer}</span>
+              </div>
+            </div>
+
+            <p className="insp-desc">{selectedEvent.description || "No description available."}</p>
+
+            <div className="insp-grid">
+              <div className="insp-field">
+                <span className="insp-key">Source</span>
+                <span className="insp-val">{selectedEvent.source || "\u2013"}</span>
+              </div>
+              <div className="insp-field">
+                <span className="insp-key">Status</span>
+                <span className="insp-val">{selectedEvent.status || "\u2013"}</span>
+              </div>
+              <div className="insp-field">
+                <span className="insp-key">Latitude</span>
+                <span className="insp-val mono">{Number(selectedEvent.lat).toFixed(5)}</span>
+              </div>
+              <div className="insp-field">
+                <span className="insp-key">Longitude</span>
+                <span className="insp-val mono">{Number(selectedEvent.lon).toFixed(5)}</span>
+              </div>
+              <div className="insp-field full">
+                <span className="insp-key">Timestamp</span>
+                <span className="insp-val">{new Date(selectedEvent.timestamp).toLocaleString()}</span>
+              </div>
+            </div>
+
+            <div className="section-header"><h2>Raw Properties</h2></div>
+            <pre className="insp-json">{JSON.stringify(selectedEvent.properties || {}, null, 2)}</pre>
+          </div>
+        </aside>
+      )}
+
+      {/* -- Bottom Timeline -- */}
+      <div className="timeline-bar">
+        <div className="timeline-top">
+          <div className="timeline-label">
+            <span className="timeline-title">Timeline</span>
+            <span className="timeline-asof">{new Date(asOf).toLocaleTimeString()}</span>
+          </div>
+          <span className={`timeline-mode ${mode === "live" && minutesAgo === 0 ? "live" : ""}`}>
+            {mode === "live" && minutesAgo === 0 ? "\u25CF LIVE" : `${minutesAgo}m ago`}
+          </span>
         </div>
 
         <input
           type="range"
+          className="timeline-slider"
           min="0"
           max="180"
           step="5"
           value={minutesAgo}
-          onChange={(event) => {
-            const value = Number(event.target.value);
-            setMinutesAgo(value);
-            setMode(value === 0 ? "live" : "replay");
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            setMinutesAgo(v);
+            setMode(v === 0 ? "live" : "replay");
           }}
         />
-
-        <div className="row muted">
+        <div className="timeline-labels">
           <span>Now</span>
-          <span>3 hours ago</span>
+          <span>3h ago</span>
         </div>
       </div>
     </div>
