@@ -1,0 +1,69 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": { "name": "Bank Tower A", "height": 220 },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-96.8006,32.7794],[-96.7999,32.7794],[-96.7999,32.7788],[-96.8006,32.7788],[-96.8006,32.7794]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Bank Tower B", "height": 180 },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-96.7988,32.7788],[-96.7982,32.7788],[-96.7982,32.7782],[-96.7988,32.7782],[-96.7988,32.7788]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Main Tower", "height": 260 },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-96.7969,32.7776],[-96.7961,32.7776],[-96.7961,32.7768],[-96.7969,32.7768],[-96.7969,32.7776]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Civic Block", "height": 130 },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-96.7977,32.7763],[-96.7969,32.7763],[-96.7969,32.7757],[-96.7977,32.7757],[-96.7977,32.7763]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Arts Tower", "height": 150 },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-96.7948,32.7810],[-96.7942,32.7810],[-96.7942,32.7804],[-96.7948,32.7804],[-96.7948,32.7810]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Market Hall", "height": 110 },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-96.8019,32.7768],[-96.8012,32.7768],[-96.8012,32.7762],[-96.8019,32.7762],[-96.8019,32.7768]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Deep Ellum Block", "height": 95 },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-96.7830,32.7845],[-96.7823,32.7845],[-96.7823,32.7839],[-96.7830,32.7839],[-96.7830,32.7845]]]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": { "name": "Fair Park Hall", "height": 80 },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[[-96.7611,32.7794],[-96.7603,32.7794],[-96.7603,32.7788],[-96.7611,32.7788],[-96.7611,32.7794]]]
+      }
+    }
+  ]
+}
