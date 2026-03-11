@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "US RealView API"
-    cors_origins: str = "http://localhost:3000"
+    cors_origins: str = "http://localhost:3000,https://pgimkhzeqqflzdqvpkwp.supabase.co,https://*.vercel.app"
     refresh_interval_seconds: int = 60
     replay_retention_hours: int = 24
     use_live_feeds: bool = True
@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     dallas_traffic_url: str = "https://www.dallasopendata.com/resource/tqs9-xfzb.json?$limit=200"
     dallas_incidents_url: str = "https://www.dallasopendata.com/resource/qv6i-rri7.json?$limit=200&$where=geocoded_column%20IS%20NOT%20NULL&$order=reporteddate%20DESC"
     dallas_crimes_url: str = "https://www.dallasopendata.com/resource/pumt-d92b.json?$limit=200&$order=offensedate%20DESC"
+
+    # Supabase PostgreSQL
+    database_url: str = "postgresql://postgres:CWY3Xkmrunu2o500@db.pgimkhzeqqflzdqvpkwp.supabase.co:5432/postgres"
+    supabase_url: str = "https://pgimkhzeqqflzdqvpkwp.supabase.co"
 
     @property
     def cors_origins_list(self):

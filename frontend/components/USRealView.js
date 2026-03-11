@@ -27,6 +27,19 @@ const LAYER_META = {
   incidents: { label: "Incidents", icon: "\u{1F534}", color: "#ef4444", height: 90, priority: 3 },
   crime: { label: "Crime", icon: "\u26A0\uFE0F", color: "#a855f7", height: 70, priority: 4 },
   cameras: { label: "Traffic Cameras", icon: "\u{1F4F7}", color: "#22d3ee", height: 100, priority: 5 },
+  satellites: { label: "Satellites", icon: "\u{1F6F0}\uFE0F", color: "#facc15", height: 200, priority: 6 },
+  flights: { label: "Flights", icon: "\u2708\uFE0F", color: "#60a5fa", height: 150, priority: 7 },
+  military_flights: { label: "Military", icon: "\u{1F6E9}\uFE0F", color: "#f87171", height: 160, priority: 8 },
+  seismic: { label: "Seismic", icon: "\u{1F30B}", color: "#fb923c", height: 40, priority: 9 },
+};
+
+/* ───────── visual effects presets ───────── */
+const VISUAL_MODES = {
+  normal: { label: "Normal", filter: "none" },
+  nightvision: { label: "Night Vision", filter: "brightness(1.4) contrast(1.3) saturate(0.4) sepia(0.6) hue-rotate(80deg)" },
+  crt: { label: "CRT", filter: "contrast(1.2) brightness(0.9) saturate(0.8)" },
+  flir: { label: "FLIR", filter: "invert(0.92) contrast(1.5) brightness(1.1) saturate(0.3) hue-rotate(180deg)" },
+  bloom: { label: "Bloom", filter: "brightness(1.15) contrast(1.05) saturate(1.2)" },
 };
 
 /* ───────── Cesium loader ───────── */
@@ -198,6 +211,15 @@ function countByLayer(events) {
   return counts;
 }
 
+function groupByLayer(events) {
+  const groups = {};
+  for (const e of events) {
+    if (!groups[e.layer]) groups[e.layer] = [];
+    groups[e.layer].push(e);
+  }
+  return groups;
+}
+
 /* ───────── Inspector field helpers ───────── */
 function InspField({ k, v, mono, full, cls, tag }) {
   if (!v && v !== 0) return null;
@@ -263,7 +285,7 @@ export default function USRealView() {
   const buildingsRef = useRef(null);
 
   const [layers, setLayers] = useState([]);
-  const [selectedLayers, setSelectedLayers] = useState(["weather", "traffic", "incidents", "crime", "cameras"]);
+  const [selectedLayers, setSelectedLayers] = useState(["weather", "traffic", "incidents", "crime", "cameras", "satellites", "flights", "military_flights", "seismic"]);
   const [events, setEvents] = useState([]);
   const [feeds, setFeeds] = useState([]);
   const [selectedEvent, setSelectedEvent] = useState(null);
@@ -276,6 +298,11 @@ export default function USRealView() {
   const [panelOpen, setPanelOpen] = useState(true);
   const [inspectorOpen, setInspectorOpen] = useState(true);
   const [buildingsVisible, setBuildingsVisible] = useState(true);
+  const [collapsedGroups, setCollapsedGroups] = useState(new Set());
+
+  /* ── Visual Effects State ── */
+  const [visualMode, setVisualMode] = useState("normal");
+  const [fxPanelOpen, setFxPanelOpen] = useState(false);
 
   /* ── City Config State ── */
   const [cityConfig, setCityConfig] = useState(null);
@@ -480,13 +507,25 @@ export default function USRealView() {
 
         /* Fly to Dallas */
         viewer.camera.flyTo({
-          destination: Cesium.Cartesian3.fromDegrees(DALLAS_CENTER.lon, DALLAS_CENTER.lat, 3500),
+          destination: Cesium.Cartesian3.fromDegrees(DALLAS_CENTER.lon, DALLAS_CENTER.lat, 8000000),
           orientation: {
-            heading: Cesium.Math.toRadians(15),
-            pitch: Cesium.Math.toRadians(-42),
+            heading: Cesium.Math.toRadians(0),
+            pitch: Cesium.Math.toRadians(-90),
             roll: 0,
           },
-          duration: 2.5,
+          duration: 0.5,
+          complete: () => {
+            /* Then zoom into Dallas */
+            viewer.camera.flyTo({
+              destination: Cesium.Cartesian3.fromDegrees(DALLAS_CENTER.lon, DALLAS_CENTER.lat, 3500),
+              orientation: {
+                heading: Cesium.Math.toRadians(15),
+                pitch: Cesium.Math.toRadians(-42),
+                roll: 0,
+              },
+              duration: 3.0,
+            });
+          },
         });
 
         /* Click handler */
@@ -578,23 +617,60 @@ export default function USRealView() {
       const c = colorForLayer(Cesium, ev.layer);
       const alt = heightForLayer(ev.layer);
       const isCamera = ev.layer === "cameras";
+      const isSatellite = ev.layer === "satellites";
+      const isFlight = ev.layer === "flights" || ev.layer === "military_flights";
+      const isSeismic = ev.layer === "seismic";
+      const isMilitary = ev.layer === "military_flights";
       let ent = map.get(ev.entity_id);
+
+      /* Satellite altitude (use real altitude from properties) */
+      const entityAlt = isSatellite
+        ? Math.min((ev.properties?.altitude_km || 400) * 100, 800000)
+        : isFlight
+        ? Math.min((ev.altitude || 10000) * 0.3, 50000)
+        : alt / 2;
+
+      /* Point size varies by type */
+      const pointSize = isSatellite ? 6
+        : isFlight ? 8
+        : isSeismic ? Math.min(6 + (ev.properties?.magnitude || 3) * 3, 24)
+        : isCamera ? 12
+        : ev.layer === "weather" ? 14
+        : 10;
 
       if (!ent) {
         ent = ds.entities.add({
           id: ev.entity_id,
-          position: Cesium.Cartesian3.fromDegrees(ev.lon, ev.lat, alt / 2),
+          position: Cesium.Cartesian3.fromDegrees(ev.lon, ev.lat, entityAlt),
           point: {
-            pixelSize: isCamera ? 12 : ev.layer === "weather" ? 14 : 10,
+            pixelSize: pointSize,
             color: c,
-            outlineColor: isCamera ? Cesium.Color.WHITE.withAlpha(0.9) : Cesium.Color.BLACK.withAlpha(0.7),
-            outlineWidth: isCamera ? 2.5 : 1.5,
-            scaleByDistance: new Cesium.NearFarScalar(1500, 1.3, 150000, 0.5),
-            translucencyByDistance: new Cesium.NearFarScalar(1500, 1.0, 180000, 0.1),
-            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 300000),
-            heightReference: Cesium.HeightReference.RELATIVE_TO_GROUND,
+            outlineColor: isCamera ? Cesium.Color.WHITE.withAlpha(0.9)
+              : isSatellite ? Cesium.Color.YELLOW.withAlpha(0.8)
+              : isMilitary ? Cesium.Color.RED.withAlpha(0.8)
+              : Cesium.Color.BLACK.withAlpha(0.7),
+            outlineWidth: isCamera ? 2.5 : isSatellite ? 1 : 1.5,
+            scaleByDistance: new Cesium.NearFarScalar(1500, isSatellite ? 1.0 : 1.3, 500000, isSatellite ? 0.3 : 0.5),
+            translucencyByDistance: new Cesium.NearFarScalar(1500, 1.0, isSatellite ? 5000000 : 180000, 0.1),
+            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, isSatellite ? 50000000 : isFlight ? 2000000 : 300000),
+            heightReference: (isSatellite || isFlight) ? Cesium.HeightReference.NONE : Cesium.HeightReference.RELATIVE_TO_GROUND,
           },
-          cylinder: isCamera ? undefined : {
+          /* Seismic pulsing ring */
+          ...(isSeismic ? {
+            ellipse: {
+              semiMajorAxis: Math.max(5000, (ev.properties?.magnitude || 3) * 15000),
+              semiMinorAxis: Math.max(5000, (ev.properties?.magnitude || 3) * 15000),
+              material: c.withAlpha(0.15),
+              outline: true,
+              outlineColor: c.withAlpha(0.6),
+              outlineWidth: 2,
+              height: 0,
+              heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+              distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 5000000),
+            },
+          } : {}),
+          /* Cylinder for non-special layers */
+          cylinder: (isCamera || isSatellite || isFlight || isSeismic) ? undefined : {
             length: alt,
             topRadius: 35,
             bottomRadius: 35,
@@ -604,20 +680,44 @@ export default function USRealView() {
             outlineWidth: 1,
             distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 25000),
           },
+          /* Satellite orbit path visualization */
+          ...(isSatellite ? {
+            path: {
+              leadTime: 2700,
+              trailTime: 2700,
+              width: 1,
+              material: new Cesium.PolylineGlowMaterialProperty({
+                glowPower: 0.15,
+                color: c.withAlpha(0.4),
+              }),
+            },
+          } : {}),
           label: {
-            text: isCamera
+            text: isSatellite
+              ? "\u{1F6F0}\uFE0F " + ev.title
+              : isFlight
+              ? (isMilitary ? "\u{1F6E9}\uFE0F " : "\u2708\uFE0F ") + ev.title
+              : isSeismic
+              ? "\u{1F30B} " + ev.title
+              : isCamera
               ? "\uD83D\uDCF7 " + ev.title
               : ev.title && ev.title.length > 42 ? ev.title.slice(0, 40) + "\u2026" : ev.title,
-            font: isCamera ? "600 12px Inter, sans-serif" : "600 11px Inter, sans-serif",
+            font: "600 11px Inter, sans-serif",
             scale: 1.0,
             show: true,
             pixelOffset: new Cesium.Cartesian2(0, -20),
-            fillColor: isCamera ? Cesium.Color.fromCssColorString("#22d3ee") : Cesium.Color.WHITE,
+            fillColor: isSatellite ? Cesium.Color.fromCssColorString("#facc15")
+              : isFlight ? Cesium.Color.fromCssColorString("#60a5fa")
+              : isMilitary ? Cesium.Color.fromCssColorString("#f87171")
+              : isSeismic ? Cesium.Color.fromCssColorString("#fb923c")
+              : isCamera ? Cesium.Color.fromCssColorString("#22d3ee")
+              : Cesium.Color.WHITE,
             style: Cesium.LabelStyle.FILL_AND_OUTLINE,
             outlineColor: Cesium.Color.BLACK,
             outlineWidth: 3,
             horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, isCamera ? 20000 : 15000),
+            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0,
+              isSatellite ? 5000000 : isFlight ? 500000 : isSeismic ? 2000000 : isCamera ? 20000 : 15000),
             showBackground: true,
             backgroundColor: Cesium.Color.fromCssColorString("#0f172a").withAlpha(0.75),
             backgroundPadding: new Cesium.Cartesian2(6, 4),
@@ -626,15 +726,22 @@ export default function USRealView() {
         });
         map.set(ev.entity_id, ent);
       } else {
-        ent.position = Cesium.Cartesian3.fromDegrees(ev.lon, ev.lat, alt / 2);
+        ent.position = Cesium.Cartesian3.fromDegrees(ev.lon, ev.lat, entityAlt);
         ent.properties = ev;
-        if (ent.point) ent.point.color = c;
+        if (ent.point) {
+          ent.point.color = c;
+          ent.point.pixelSize = pointSize;
+        }
         if (ent.cylinder) {
           ent.cylinder.material = c.withAlpha(0.5);
           ent.cylinder.outlineColor = c.withAlpha(0.85);
         }
         if (ent.label) {
-          ent.label.text = ev.title && ev.title.length > 42 ? ev.title.slice(0, 40) + "\u2026" : ev.title;
+          const labelText = isSatellite ? "\u{1F6F0}\uFE0F " + ev.title
+            : isFlight ? ((isMilitary ? "\u{1F6E9}\uFE0F " : "\u2708\uFE0F ") + ev.title)
+            : isSeismic ? "\u{1F30B} " + ev.title
+            : ev.title && ev.title.length > 42 ? ev.title.slice(0, 40) + "\u2026" : ev.title;
+          ent.label.text = labelText;
         }
       }
     });
@@ -697,6 +804,15 @@ export default function USRealView() {
 
   const totalHealthy = feeds.filter((f) => f.ok).length;
   const layerList = layers.length ? layers : Object.entries(LAYER_META).map(([id, m]) => ({ id, label: m.label, count: 0 }));
+  const groupedEvents = useMemo(() => groupByLayer(visibleEvents), [visibleEvents]);
+
+  const toggleGroupCollapse = useCallback((layer) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(layer)) next.delete(layer); else next.add(layer);
+      return next;
+    });
+  }, []);
 
   /* ================================================================
      JSX
@@ -704,19 +820,39 @@ export default function USRealView() {
   return (
     <div className="app-shell">
       {/* -- 3D Map -- */}
-      <div ref={containerRef} className="map-host" />
+      <div ref={containerRef} className="map-host" style={{ filter: VISUAL_MODES[visualMode]?.filter || "none" }} />
+
+      {/* -- CRT scanline overlay -- */}
+      {visualMode === "crt" && <div className="crt-overlay" />}
 
       {/* -- Top Bar -- */}
       <header className="topbar">
-        <div className="brand">
-          <div className="brand-icon">{"\u25C6"}</div>
-          <div>
-            <h1>US RealView</h1>
-            <span className="brand-sub">Real-time 3D City Operations</span>
+        <div className="topbar-row topbar-primary">
+          <div className="brand">
+            <div className="brand-icon">{"\u25C6"}</div>
+            <div>
+              <h1>US RealView</h1>
+              <span className="brand-sub">Live Operations Center</span>
+            </div>
           </div>
+
+          <div className="topbar-spacer" />
+
+          <div className="status-pill">
+            <span className={`status-dot ${status === "Ready" || status.includes("events") ? "ok" : ""}`} />
+            {status}
+          </div>
+
+          <button
+            className={`btn btn-icon ${mode === "live" && minutesAgo === 0 ? "btn-live" : "btn-ghost"}`}
+            onClick={() => { setMode("live"); setMinutesAgo(0); }}
+            title="Switch to live mode"
+          >
+            <span className="live-dot" /> Live
+          </button>
         </div>
 
-        <nav className="top-controls">
+        <nav className="topbar-row topbar-controls">
           {/* State Selector */}
           {availableStates.length > 0 && (
             <select
@@ -729,7 +865,7 @@ export default function USRealView() {
               className="search-input state-select"
               title="Select state"
             >
-              <option value="">All States</option>
+              <option value="">🏠 All States</option>
               {availableStates.map((s) => (
                 <option key={s.code} value={s.code}>
                   {s.name} ({s.code}){detectedState === s.code ? " \u{1F4CD}" : ""}
@@ -738,6 +874,7 @@ export default function USRealView() {
             </select>
           )}
 
+          {/* Places dropdown */}
           <div className="search-group">
             <select
               value={query}
@@ -751,58 +888,81 @@ export default function USRealView() {
                 }
               }}
               className="search-input"
+              title="Fly to location"
             >
-              <option value="">All areas (no filter)</option>
+              <option value="">📍 All areas</option>
               {allPlaces.map((p) => (
                 <option key={p.label} value={p.label}>{p.label}</option>
               ))}
             </select>
-            <button onClick={() => flyToPreset()} className="btn btn-primary" title="Fly">{"\u2708"}</button>
+            <button onClick={() => flyToPreset()} className="btn btn-primary btn-icon" title="Fly to selection">{"\u2708"}</button>
           </div>
 
           <div className="btn-group">
             <button
-              className={`btn ${mode === "live" && minutesAgo === 0 ? "btn-live" : "btn-ghost"}`}
-              onClick={() => { setMode("live"); setMinutesAgo(0); }}
-            >
-              <span className="live-dot" /> Live
-            </button>
-            <button
-              className={`btn ${buildingsVisible ? "btn-active" : "btn-ghost"}`}
+              className={`btn btn-icon ${buildingsVisible ? "btn-active" : "btn-ghost"}`}
               onClick={() => setBuildingsVisible(!buildingsVisible)}
               title="Toggle 3D buildings"
             >
               {"\uD83C\uDFD9\uFE0F"}
             </button>
-          </div>
-
-          <div className="status-pill">
-            <span className={`status-dot ${status === "Ready" || status.includes("events") ? "ok" : ""}`} />
-            {status}
+            <button
+              className={`btn btn-icon ${fxPanelOpen ? "btn-active" : "btn-ghost"}`}
+              onClick={() => setFxPanelOpen(!fxPanelOpen)}
+              title="Visual effects"
+            >
+              {"\uD83C\uDFA8"}
+            </button>
+            <button
+              className="btn btn-icon btn-ghost"
+              onClick={() => setPanelOpen(!panelOpen)}
+              title={panelOpen ? "Hide panel" : "Show panel"}
+            >
+              {panelOpen ? "◧" : "☰"}
+            </button>
           </div>
         </nav>
       </header>
 
-      {/* -- Left Panel Toggle -- */}
-      <button
-        className="panel-toggle left-toggle"
-        onClick={() => setPanelOpen(!panelOpen)}
-        title={panelOpen ? "Collapse" : "Expand"}
-      >
-        {panelOpen ? "\u25C2" : "\u25B8"}
-      </button>
-
       {/* -- Left Panel -- */}
       <aside className={`side-panel ${panelOpen ? "open" : "closed"}`}>
+
+        {/* Visual Effects Panel (inline at top of left panel when open) */}
+        {fxPanelOpen && (
+          <div className="fx-panel">
+            <div className="section-header">
+              <h2>{"\uD83C\uDFA8"} Visual Mode</h2>
+            </div>
+            <div className="fx-grid">
+              {Object.entries(VISUAL_MODES).map(([key, mode]) => (
+                <button
+                  key={key}
+                  className={`fx-chip ${visualMode === key ? "active" : ""}`}
+                  onClick={() => setVisualMode(key)}
+                >
+                  {mode.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         {/* KPI Row */}
         <div className="kpi-row">
           <div className="kpi">
-            <span className="kpi-value">{visibleEvents.length}</span>
-            <span className="kpi-label">Entities</span>
+            <span className="kpi-value">{visibleEvents.length.toLocaleString()}</span>
+            <span className="kpi-label">Events</span>
           </div>
           <div className="kpi">
             <span className="kpi-value">{totalHealthy}/{feeds.length || "\u2013"}</span>
             <span className="kpi-label">Feeds OK</span>
+          </div>
+          <div className="kpi">
+            <span className="kpi-value">{(layerCounts["flights"] || 0) + (layerCounts["military_flights"] || 0)}</span>
+            <span className="kpi-label">Flights</span>
+          </div>
+          <div className="kpi">
+            <span className="kpi-value">{layerCounts["satellites"] || 0}</span>
+            <span className="kpi-label">Satellites</span>
           </div>
         </div>
 
@@ -849,33 +1009,52 @@ export default function USRealView() {
           </div>
         )}
 
-        {/* Event list */}
+        {/* Grouped event list */}
         <div className="section-header">
-          <h2>Events <span className="header-count">{visibleEvents.length}</span></h2>
+          <h2>Events <span className="header-count">{visibleEvents.length.toLocaleString()}</span></h2>
         </div>
-        <div className="event-list">
+        <div className="event-groups">
           {visibleEvents.length === 0 ? (
             <p className="empty">No events matching filters.</p>
           ) : (
-            visibleEvents.slice(0, 50).map((ev) => {
-              const meta = LAYER_META[ev.layer] || {};
+            Object.entries(LAYER_META).map(([layerId, meta]) => {
+              const group = groupedEvents[layerId];
+              if (!group || !group.length) return null;
+              const collapsed = collapsedGroups.has(layerId);
               return (
-                <button
-                  key={ev.event_id}
-                  className={`event-card ${selectedEvent?.event_id === ev.event_id ? "selected" : ""}`}
-                  onClick={() => flyToEvent(ev)}
-                >
-                  <div className="event-card-top">
-                    <span className="event-badge" style={{ background: meta.color || "#555" }}>
-                      {meta.icon}
-                    </span>
-                    <span className="event-title">{ev.title}</span>
-                  </div>
-                  <div className="event-card-bottom">
-                    <span className="event-desc">{ev.description || "No detail"}</span>
-                    <span className="event-time">{timeAgo(ev.timestamp)}</span>
-                  </div>
-                </button>
+                <div key={layerId} className="event-group">
+                  <button className="event-group-header" onClick={() => toggleGroupCollapse(layerId)}>
+                    <span className="event-group-dot" style={{ background: meta.color }} />
+                    <span className="event-group-name">{meta.icon} {meta.label}</span>
+                    <span className="event-group-count" style={{ color: meta.color }}>{group.length}</span>
+                    <span className="event-group-chevron">{collapsed ? "▸" : "▾"}</span>
+                  </button>
+                  {!collapsed && (
+                    <div className="event-list">
+                      {group.slice(0, 30).map((ev) => (
+                        <button
+                          key={ev.event_id}
+                          className={`event-card ${selectedEvent?.event_id === ev.event_id ? "selected" : ""}`}
+                          onClick={() => flyToEvent(ev)}
+                        >
+                          <div className="event-card-top">
+                            <span className="event-badge" style={{ background: meta.color }}>
+                              {meta.icon}
+                            </span>
+                            <span className="event-title">{ev.title}</span>
+                          </div>
+                          <div className="event-card-bottom">
+                            <span className="event-desc">{ev.description || "No detail"}</span>
+                            <span className="event-time">{timeAgo(ev.timestamp)}</span>
+                          </div>
+                        </button>
+                      ))}
+                      {group.length > 30 && (
+                        <p className="event-more">+{group.length - 30} more</p>
+                      )}
+                    </div>
+                  )}
+                </div>
               );
             })
           )}
@@ -1043,6 +1222,96 @@ export default function USRealView() {
                 </div>
               </>
 
+            ) : selectedEvent.layer === "satellites" ? (
+              <>
+                <p className="insp-desc">{selectedEvent.description}</p>
+                <div className="insp-sat-hero">
+                  <span className="insp-sat-orbit">{selectedEvent.properties?.orbit_type || "LEO"}</span>
+                  <span className="insp-sat-alt">{selectedEvent.properties?.altitude_km?.toLocaleString() || "\u2013"} km</span>
+                </div>
+                <div className="insp-grid">
+                  <InspField k="NORAD ID" v={selectedEvent.properties?.norad_id} mono />
+                  <InspField k="Object Type" v={selectedEvent.properties?.object_type} />
+                  <InspField k="Country" v={selectedEvent.properties?.country_code} />
+                  <InspField k="Inclination" v={selectedEvent.properties?.inclination ? `${selectedEvent.properties.inclination}\u00B0` : null} />
+                  <InspField k="Mean Motion" v={selectedEvent.properties?.mean_motion ? `${selectedEvent.properties.mean_motion} rev/day` : null} />
+                  <InspField k="Eccentricity" v={selectedEvent.properties?.eccentricity} mono />
+                  <InspField k="RAAN" v={selectedEvent.properties?.raan ? `${selectedEvent.properties.raan}\u00B0` : null} />
+                  <InspField k="Epoch" v={selectedEvent.properties?.epoch} full mono />
+                  <InspField k="Source" v="CelesTrak" />
+                  <InspField k="Latitude" v={Number(selectedEvent.lat).toFixed(5)} mono />
+                  <InspField k="Longitude" v={Number(selectedEvent.lon).toFixed(5)} mono />
+                </div>
+              </>
+
+            ) : (selectedEvent.layer === "flights" || selectedEvent.layer === "military_flights") ? (
+              <>
+                <p className="insp-desc">{selectedEvent.description}</p>
+                <div className="insp-flight-hero">
+                  <div className="insp-flight-callsign">{selectedEvent.properties?.callsign || selectedEvent.properties?.icao24}</div>
+                  <div className="insp-flight-stats">
+                    <div className="insp-flight-stat">
+                      <span className="insp-flight-stat-val">{selectedEvent.properties?.altitude_ft?.toLocaleString() || "\u2013"}</span>
+                      <span className="insp-flight-stat-lbl">ft</span>
+                    </div>
+                    <div className="insp-flight-stat">
+                      <span className="insp-flight-stat-val">{selectedEvent.properties?.speed_kts || "\u2013"}</span>
+                      <span className="insp-flight-stat-lbl">kts</span>
+                    </div>
+                    <div className="insp-flight-stat">
+                      <span className="insp-flight-stat-val">{selectedEvent.properties?.heading != null ? `${Math.round(selectedEvent.properties.heading)}\u00B0` : "\u2013"}</span>
+                      <span className="insp-flight-stat-lbl">hdg</span>
+                    </div>
+                  </div>
+                </div>
+                <div className="insp-grid">
+                  <InspField k="ICAO24" v={selectedEvent.properties?.icao24} mono />
+                  <InspField k="Callsign" v={selectedEvent.properties?.callsign} mono />
+                  <InspField k="Country" v={selectedEvent.properties?.origin_country} />
+                  <InspField k="Type" v={selectedEvent.properties?.is_military ? "Military" : "Commercial"} tag={selectedEvent.properties?.is_military ? "#f87171" : "#60a5fa"} />
+                  <InspField k="Altitude" v={selectedEvent.properties?.altitude_ft ? `${selectedEvent.properties.altitude_ft.toLocaleString()} ft` : null} />
+                  <InspField k="Speed" v={selectedEvent.properties?.speed_kts ? `${selectedEvent.properties.speed_kts} kts` : null} />
+                  <InspField k="Heading" v={selectedEvent.properties?.heading != null ? `${Math.round(selectedEvent.properties.heading)}\u00B0` : null} />
+                  <InspField k="Source" v="OpenSky Network" />
+                  <InspField k="Latitude" v={Number(selectedEvent.lat).toFixed(5)} mono />
+                  <InspField k="Longitude" v={Number(selectedEvent.lon).toFixed(5)} mono />
+                </div>
+              </>
+
+            ) : selectedEvent.layer === "seismic" ? (
+              <>
+                <p className="insp-desc">{selectedEvent.description}</p>
+                <div className="insp-quake-hero">
+                  <span className="insp-quake-mag" style={{
+                    color: (selectedEvent.properties?.magnitude || 0) >= 5 ? "#ef4444"
+                      : (selectedEvent.properties?.magnitude || 0) >= 3 ? "#f97316" : "#fb923c"
+                  }}>M{selectedEvent.properties?.magnitude?.toFixed(1) || "\u2013"}</span>
+                  <span className="insp-quake-place">{selectedEvent.properties?.place || "Unknown"}</span>
+                </div>
+                <div className="insp-grid">
+                  <InspField k="Depth" v={selectedEvent.properties?.depth_km != null ? `${selectedEvent.properties.depth_km.toFixed(1)} km` : null} />
+                  <InspField k="Severity" v={selectedEvent.properties?.severity} tag={
+                    selectedEvent.properties?.severity === "Major" ? "#ef4444"
+                    : selectedEvent.properties?.severity === "Moderate" ? "#f59e0b" : null
+                  } />
+                  <InspField k="Alert Level" v={selectedEvent.properties?.alert || "none"} tag={
+                    selectedEvent.properties?.alert === "red" ? "#ef4444"
+                    : selectedEvent.properties?.alert === "orange" ? "#f97316"
+                    : selectedEvent.properties?.alert === "yellow" ? "#facc15" : null
+                  } />
+                  <InspField k="Tsunami" v={selectedEvent.properties?.tsunami ? "Yes \u26A0\uFE0F" : "No"} tag={selectedEvent.properties?.tsunami ? "#ef4444" : null} />
+                  <InspField k="Felt Reports" v={selectedEvent.properties?.felt || "None"} />
+                  <InspField k="Significance" v={selectedEvent.properties?.significance} />
+                  <InspField k="Type" v={selectedEvent.properties?.type} />
+                  <InspField k="Source" v="USGS" />
+                  <InspField k="Latitude" v={Number(selectedEvent.lat).toFixed(5)} mono />
+                  <InspField k="Longitude" v={Number(selectedEvent.lon).toFixed(5)} mono />
+                </div>
+                {selectedEvent.properties?.url && (
+                  <a href={selectedEvent.properties.url} target="_blank" rel="noopener noreferrer" className="cam-txdot-link">{"\uD83C\uDF0D"} View on USGS</a>
+                )}
+              </>
+
             ) : (
               <>
                 <p className="insp-desc">{selectedEvent.description || "No description available."}</p>
@@ -1086,8 +1355,12 @@ export default function USRealView() {
         />
         <div className="timeline-labels">
           <span>Now</span>
+          <span>30m</span>
+          <span>1h</span>
+          <span>2h</span>
           <span>3h ago</span>
         </div>
+        <div className="timeline-hint">Drag slider to replay past events</div>
       </div>
     </div>
   );

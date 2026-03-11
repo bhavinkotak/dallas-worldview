@@ -7,13 +7,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import get_settings
 from .models import EventEnvelope
 from .providers import dallas_open_data_events, weather_events, traffic_camera_events, ccm_crime_events
+from .global_providers import satellite_events, flight_events, seismic_events
 from .store import EventStore
+from .database import SupabaseStore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
-store = EventStore(retention_hours=settings.replay_retention_hours)
+
+# Primary store: Supabase PostgreSQL (with in-memory fallback)
+db_store = SupabaseStore(dsn=settings.database_url, retention_hours=settings.replay_retention_hours)
+mem_store = EventStore(retention_hours=settings.replay_retention_hours)
+store = mem_store  # will be swapped to db_store on startup if connection succeeds
 refresh_task = None
 
 # ── City / Area Configuration ─────────────────────────────────────────
@@ -82,6 +88,19 @@ CITY_CONFIG = {
 }
 
 
+def _derive_weather_locations() -> list[dict]:
+    """Extract unique city coordinates from CITY_CONFIG for NWS weather queries."""
+    seen = set()
+    locations = []
+    for state in CITY_CONFIG.get("states", []):
+        for city in state.get("cities", []):
+            key = f"{city['lat']},{city['lon']}"
+            if key not in seen:
+                seen.add(key)
+                locations.append({"name": city["name"], "lat": city["lat"], "lon": city["lon"]})
+    return locations or [{"name": "Dallas", "lat": 32.7767, "lon": -96.797}]
+
+
 async def refresh_once():
     events = []
     statuses = []
@@ -91,9 +110,32 @@ async def refresh_once():
     events.extend(cam_events)
     statuses.append(cam_status)
 
+    # Global data layers (satellites, flights, seismic) — always enabled
+    try:
+        sat_evts, sat_status = await satellite_events()
+        events.extend(sat_evts)
+        statuses.append(sat_status)
+    except Exception as exc:
+        logger.warning("Satellite feed error: %s", exc)
+
+    try:
+        flt_evts, flt_status = await flight_events()
+        events.extend(flt_evts)
+        statuses.append(flt_status)
+    except Exception as exc:
+        logger.warning("Flight feed error: %s", exc)
+
+    try:
+        seis_evts, seis_status = await seismic_events()
+        events.extend(seis_evts)
+        statuses.append(seis_status)
+    except Exception as exc:
+        logger.warning("Seismic feed error: %s", exc)
+
     if settings.use_live_feeds:
         logger.info("Refreshing live feeds…")
-        weather_list, weather_status = await weather_events(settings)
+        weather_locs = _derive_weather_locations()
+        weather_list, weather_status = await weather_events(settings, locations=weather_locs)
         live_events, live_statuses = await dallas_open_data_events(settings)
         ccm_events_list, ccm_status = await ccm_crime_events()
         events.extend(weather_list)
@@ -109,6 +151,14 @@ async def refresh_once():
     await store.upsert_many(events)
     await store.set_feed_status(statuses)
 
+    # Also persist to Supabase if DB store is alive
+    if store is not db_store and db_store._pool:
+        try:
+            await db_store.upsert_many(events)
+            await db_store.set_feed_status(statuses)
+        except Exception as exc:
+            logger.warning("Supabase sync error: %s", exc)
+
 
 async def refresh_loop():
     while True:
@@ -121,7 +171,16 @@ async def refresh_loop():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global refresh_task
+    global refresh_task, store
+    # Connect to Supabase
+    try:
+        await db_store.connect()
+        store = db_store
+        logger.info("Using Supabase PostgreSQL as primary store")
+    except Exception as exc:
+        logger.warning("Supabase connection failed, using in-memory store: %s", exc)
+        store = mem_store
+
     await refresh_once()
     refresh_task = asyncio.create_task(refresh_loop())
     try:
@@ -133,6 +192,7 @@ async def lifespan(app: FastAPI):
                 await refresh_task
             except asyncio.CancelledError:
                 pass
+        await db_store.close()
 
 
 app = FastAPI(title=settings.app_name, version="1.0.0", lifespan=lifespan)
@@ -160,7 +220,13 @@ def filter_bbox(events, min_lat: float | None, max_lat: float | None, min_lon: f
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "time": datetime.now(timezone.utc).isoformat()}
+    db_ok = db_store._pool is not None
+    return {
+        "status": "ok",
+        "time": datetime.now(timezone.utc).isoformat(),
+        "store": "supabase" if store is db_store else "memory",
+        "database_connected": db_ok,
+    }
 
 
 @app.get("/api/meta")
@@ -189,6 +255,10 @@ async def layers():
             {"id": "incidents", "label": "Incidents", "count": counts.get("incidents", 0)},
             {"id": "crime", "label": "Crime (DFW-wide)", "count": counts.get("crime", 0)},
             {"id": "cameras", "label": "Traffic Cameras", "count": counts.get("cameras", 0)},
+            {"id": "satellites", "label": "Satellites", "count": counts.get("satellites", 0)},
+            {"id": "flights", "label": "Commercial Flights", "count": counts.get("flights", 0)},
+            {"id": "military_flights", "label": "Military Flights", "count": counts.get("military_flights", 0)},
+            {"id": "seismic", "label": "Seismic Activity", "count": counts.get("seismic", 0)},
         ]
     }
 

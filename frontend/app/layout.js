@@ -1,8 +1,8 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "US RealView",
-  description: "Real-time 3D geospatial operations center",
+  title: "US RealView — Global Geospatial Operations Center",
+  description: "Real-time 3D geospatial dashboard with satellite tracking, live flight data, seismic activity, CCTV feeds, and OSINT layers",
 };
 
 export default function RootLayout({ children }) {

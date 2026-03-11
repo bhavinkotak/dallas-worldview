@@ -50,22 +50,36 @@ a { color: #7dd3fc; text-decoration: none; }
   position: absolute;
   top: 12px; left: 12px; right: 12px;
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 8px;
   z-index: 30;
   pointer-events: none;
 }
 .topbar > * { pointer-events: auto; }
 
-/* Brand */
-.brand {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 16px;
+.topbar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
   background: rgba(5,10,20,0.82);
   border: 1px solid rgba(125,211,252,0.15);
   border-radius: 14px;
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
+}
+.topbar-primary {
+  padding: 10px 16px;
+}
+.topbar-controls {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.topbar-spacer { flex: 1; }
+
+/* Brand */
+.brand {
+  display: flex; align-items: center; gap: 10px;
   flex-shrink: 0;
 }
 .brand-icon {
@@ -90,18 +104,7 @@ a { color: #7dd3fc; text-decoration: none; }
   font-weight: 500;
 }
 
-/* Top controls */
-.top-controls {
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px 12px;
-  background: rgba(5,10,20,0.82);
-  border: 1px solid rgba(125,211,252,0.15);
-  border-radius: 14px;
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  flex-wrap: wrap;
-}
-
+/* Search & selects */
 .search-group {
   display: flex; align-items: center; gap: 4px;
 }
@@ -177,6 +180,11 @@ select.search-input option {
   color: #7dd3fc;
 }
 .btn-group { display: flex; gap: 4px; }
+.btn-icon {
+  padding: 7px 10px;
+  min-width: 34px;
+  justify-content: center;
+}
 
 .live-dot {
   width: 7px; height: 7px;
@@ -210,31 +218,10 @@ select.search-input option {
 /* ════════════════════════════════════════════
    LEFT SIDE PANEL
    ════════════════════════════════════════════ */
-.panel-toggle {
-  position: absolute;
-  z-index: 31;
-  width: 22px; height: 40px;
-  display: flex; align-items: center; justify-content: center;
-  background: rgba(5,10,20,0.85);
-  border: 1px solid rgba(125,211,252,0.15);
-  border-radius: 0 8px 8px 0;
-  color: #7dd3fc;
-  font-size: 11px;
-  cursor: pointer;
-  transition: left 0.35s cubic-bezier(0.4,0,0.2,1);
-}
-.left-toggle {
-  top: 50%;
-  transform: translateY(-50%);
-  left: 292px;
-}
-.side-panel.closed ~ .left-toggle,
-.side-panel.closed + .left-toggle { left: 0; border-radius: 0 8px 8px 0; }
-
 .side-panel {
   position: absolute;
   left: 12px;
-  top: 70px;
+  top: 120px;
   bottom: 80px;
   width: 280px;
   z-index: 30;
@@ -276,8 +263,8 @@ select.search-input option {
 /* KPI Row */
 .kpi-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  grid-template-columns: 1fr 1fr 1fr 1fr;
+  gap: 6px;
   margin-bottom: 4px;
 }
 .kpi {
@@ -288,7 +275,7 @@ select.search-input option {
   display: flex; flex-direction: column; gap: 2px;
 }
 .kpi-value {
-  font-size: 22px; font-weight: 700;
+  font-size: 18px; font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: #f1f5f9;
   line-height: 1.1;
@@ -436,12 +423,67 @@ select.search-input option {
   text-align: center;
 }
 
+/* Event groups (collapsible by layer) */
+.event-groups {
+  display: flex; flex-direction: column; gap: 2px;
+  max-height: calc(100vh - 540px);
+  overflow-y: auto;
+}
+.event-group {
+  border-radius: 8px;
+  overflow: hidden;
+}
+.event-group-header {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(15,23,42,0.55);
+  border: 1px solid rgba(148,163,184,0.06);
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: left;
+  font-size: 12px;
+  color: #e2e8f0;
+}
+.event-group-header:hover {
+  background: rgba(15,23,42,0.8);
+  border-color: rgba(148,163,184,0.15);
+}
+.event-group-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.event-group-name {
+  flex: 1; font-weight: 600;
+}
+.event-group-count {
+  font-size: 11px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  min-width: 20px;
+  text-align: right;
+}
+.event-group-chevron {
+  font-size: 10px;
+  color: #64748b;
+  width: 14px;
+  text-align: center;
+}
+.event-more {
+  font-size: 10px;
+  color: #64748b;
+  padding: 6px 10px;
+  text-align: center;
+  font-style: italic;
+}
+
 /* ════════════════════════════════════════════
    RIGHT INSPECTOR
    ════════════════════════════════════════════ */
 .inspector {
   position: absolute;
-  right: 12px; top: 70px; bottom: 80px;
+  right: 12px; top: 120px; bottom: 80px;
   width: 320px;
   z-index: 30;
   background: rgba(5,10,20,0.90);
@@ -690,6 +732,145 @@ select.search-input option {
 /* ════════════════════════════════════════════
    BOTTOM TIMELINE
    ════════════════════════════════════════════ */
+
+/* ── Visual Effects Panel ── */
+.fx-panel {
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid rgba(148,163,184,0.08);
+}
+.fx-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+.fx-chip {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(15,23,42,0.5);
+  border: 1px solid rgba(148,163,184,0.06);
+  color: #94a3b8;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: center;
+}
+.fx-chip:hover {
+  background: rgba(15,23,42,0.8);
+  border-color: rgba(148,163,184,0.15);
+  color: #e2e8f0;
+}
+.fx-chip.active {
+  background: rgba(56,189,248,0.12);
+  border-color: rgba(56,189,248,0.35);
+  color: #7dd3fc;
+}
+
+/* ── CRT Scanline Overlay ── */
+.crt-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent 0px,
+    transparent 2px,
+    rgba(0, 255, 0, 0.03) 2px,
+    rgba(0, 255, 0, 0.03) 4px
+  );
+  animation: crt-flicker 0.08s infinite alternate;
+}
+@keyframes crt-flicker {
+  from { opacity: 0.95; }
+  to { opacity: 1; }
+}
+
+/* ── Satellite Inspector Hero ── */
+.insp-sat-hero {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 8px 0 16px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(250,204,21,0.12), rgba(234,179,8,0.06));
+  border: 1px solid rgba(250,204,21,0.15);
+}
+.insp-sat-orbit {
+  font-size: 24px;
+  font-weight: 700;
+  color: #facc15;
+  letter-spacing: 0.02em;
+}
+.insp-sat-alt {
+  font-size: 14px;
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+/* ── Flight Inspector Hero ── */
+.insp-flight-hero {
+  margin: 8px 0 16px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(96,165,250,0.12), rgba(59,130,246,0.06));
+  border: 1px solid rgba(96,165,250,0.15);
+}
+.insp-flight-callsign {
+  font-size: 22px;
+  font-weight: 700;
+  color: #60a5fa;
+  font-family: 'JetBrains Mono', 'SF Mono', monospace;
+  letter-spacing: 0.04em;
+  margin-bottom: 8px;
+}
+.insp-flight-stats {
+  display: flex;
+  gap: 16px;
+}
+.insp-flight-stat {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+.insp-flight-stat-val {
+  font-size: 18px;
+  font-weight: 700;
+  color: #f1f5f9;
+  font-variant-numeric: tabular-nums;
+}
+.insp-flight-stat-lbl {
+  font-size: 10px;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ── Seismic/Earthquake Inspector Hero ── */
+.insp-quake-hero {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin: 8px 0 16px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(251,146,60,0.12), rgba(234,88,12,0.06));
+  border: 1px solid rgba(251,146,60,0.15);
+}
+.insp-quake-mag {
+  font-size: 32px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+.insp-quake-place {
+  font-size: 13px;
+  color: #94a3b8;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
 .timeline-bar {
   position: absolute;
   z-index: 30;
@@ -762,6 +943,13 @@ select.search-input option {
   color: #475569;
   font-weight: 500;
 }
+.timeline-hint {
+  text-align: center;
+  font-size: 9px;
+  color: #374151;
+  margin-top: 4px;
+  letter-spacing: 0.02em;
+}
 
 /* ════════════════════════════════════════════
    RESPONSIVE
@@ -772,16 +960,22 @@ select.search-input option {
 }
 
 @media (max-width: 900px) {
-  .inspector { display: none; }
+  .inspector { width: 260px; right: 6px; }
   .side-panel { width: 240px; }
-  .topbar { flex-direction: column; align-items: stretch; }
+  .topbar-row { padding: 6px 10px; }
+  .topbar-controls { gap: 6px; }
+  .search-input { width: 150px; }
+  .brand h1 { font-size: 14px; }
 }
 
 @media (max-width: 640px) {
   .side-panel { display: none; }
-  .panel-toggle { display: none; }
-  .topbar { top: 6px; left: 6px; right: 6px; gap: 6px; }
-  .brand h1 { font-size: 14px; }
-  .search-input { width: 120px; }
+  .inspector { left: 6px; right: 6px; width: auto; top: auto; bottom: 90px; max-height: 50vh; border-radius: 14px; }
+  .topbar { top: 6px; left: 6px; right: 6px; gap: 4px; }
+  .topbar-row { padding: 6px 10px; border-radius: 10px; }
+  .brand h1 { font-size: 13px; }
+  .brand-sub { display: none; }
+  .search-input { width: 110px; }
+  .state-select { width: 110px; }
   .timeline-bar { width: calc(100vw - 12px); }
 }

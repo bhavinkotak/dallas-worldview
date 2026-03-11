@@ -467,17 +467,15 @@ async def ccm_crime_events() -> tuple[list[MapEvent], FeedStatus]:
 
 
 # ── Weather (NWS) ────────────────────────────────────────────────────
-# Query weather for multiple DFW locations so every city in the dropdown gets data.
-_WEATHER_LOCATIONS = [
-    {"name": "Dallas", "lat": 32.7767, "lon": -96.797},
-    {"name": "McKinney", "lat": 33.1972, "lon": -96.6397},
-]
+# Weather locations are now derived dynamically from city config.
+# Pass locations via weather_events(settings, locations=[...])
 
 # NWS grid-point cache (lat,lon → forecastHourly URL) — won't change
 _nws_grid_cache: dict[str, str] = {}
 
 
-async def weather_events(settings: Settings) -> tuple[list[MapEvent], FeedStatus]:
+async def weather_events(settings: Settings, locations: list[dict] | None = None) -> tuple[list[MapEvent], FeedStatus]:
+    """Fetch NWS weather for each location. Locations auto-derived from city config."""
     ts = _now()
     nws_headers = {
         "User-Agent": settings.nws_user_agent,
@@ -486,9 +484,13 @@ async def weather_events(settings: Settings) -> tuple[list[MapEvent], FeedStatus
     all_events: list[MapEvent] = []
     errors: list[str] = []
 
+    # Fallback if no locations provided
+    if not locations:
+        locations = [{"name": "Dallas", "lat": 32.7767, "lon": -96.797}]
+
     try:
         async with httpx.AsyncClient(timeout=15.0, headers=nws_headers) as client:
-            for loc in _WEATHER_LOCATIONS:
+            for loc in locations:
                 try:
                     loc_key = f"{loc['lat']},{loc['lon']}"
                     slug = loc["name"].lower().replace(" ", "-")
@@ -552,7 +554,7 @@ async def weather_events(settings: Settings) -> tuple[list[MapEvent], FeedStatus
                 except Exception as loc_exc:
                     errors.append(f"{loc['name']}: {loc_exc}")
 
-        msg = f"NWS weather: {len(all_events)} events for {len(_WEATHER_LOCATIONS)} locations."
+        msg = f"NWS weather: {len(all_events)} events for {len(locations)} locations."
         if errors:
             msg += f" Errors: {'; '.join(errors)}"
         return all_events, FeedStatus(source="nws", ok=bool(all_events), last_refresh=ts, message=msg)
